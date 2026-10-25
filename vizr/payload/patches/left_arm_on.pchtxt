@@ -1,0 +1,16 @@
+@nsobid-67c9ca1428222752f951021464a7b3597eb98fec
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Left arm on. Status: used in every headset session since build 33 (session logs).
+# CGrappleArmMP1::UpdateState main+0xc80408 `cmp w9,#1` (orig 3f050071) -> b 0x102ac00. Each tick, if the arm is inactive and
+# loaded ((arm+0xa60 & 0x21) == 0), not grappling (PL+0x598 == 0) and unmorphed (PL+0x4d4 == 0), the cave calls
+# CGrappleArmMP1::EnterFreeLook(arm, gun+0x30, *(gun+0x518)+0xe0, SM, GOC->EntityMP1) = the call ProcessGunMorph makes (0xc96b6c):
+# a60 |= 9 (active + gun-controlled), +0x980 = 9, CGunControllerMP1::EnterFreeLook plays the free-look anim. When that anim ends,
+# UpdateState sets state 10 and clears bit0; the next tick re-enters it. The grapple state machine keeps priority.
+# Draw gate (separate): CPlayerGunMP1::Render draws the arm only if PL+0x598 != 0 or a facing dot > 0.1 (0xc92c98 b.le).
+# Cave main+0x102ac00..0x102ac64. Do not combine with another patch in that range.
+@flag offset_shift 0x100
+@disabled
+00C80408 FEA90E14
+0102AC00 090300350A2A8052CA09A0728A6A6AF84A0D40F94B9945B94B0200354BD544B90B020035564943F9D60100B4C98E42F9890100B4E007BFAD22E140B9C13240B9A42240F9E30314AAE00313AA655AF197E007C1AC68826939290480520901090A3F050071EA55F117
+@stop

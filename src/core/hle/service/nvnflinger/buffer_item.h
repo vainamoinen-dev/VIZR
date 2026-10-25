@@ -44,6 +44,7 @@ public:
     bool acquire_called{};
     bool transform_to_display_inverse{};
     s32 swap_interval{};
+    u64 vr_pose_id{}; // VIZR: pose ledger id of the hook camera (0 = none)
 };
 
 } // namespace Service::android

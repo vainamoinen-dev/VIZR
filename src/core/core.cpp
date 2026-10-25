@@ -57,6 +57,7 @@
 #include "core/loader/loader.h"
 #include "core/memory.h"
 #include "core/memory/cheat_engine.h"
+#include "core/vizr/hook_runtime.h"
 #include "core/perf_stats.h"
 #include "core/reporter.h"
 #include "core/tools/freezer.h"
@@ -374,6 +375,9 @@ struct System::Impl {
             cheat_engine->Initialize();
         }
 
+        // VIZR: game profile hooks, before the application's threads run.
+        VIZR::Hooks::Install(system, *app_loader);
+
         // Register with applet manager
         // All threads are started, begin main process execution, now that we're in the clear
         applet_manager.CreateAndInsertByFrontendAppletParameters(std::move(process), params);
@@ -434,6 +438,7 @@ struct System::Impl {
         service_manager.reset();
         fs_controller.Reset();
         cheat_engine.reset();
+        VIZR::Hooks::Shutdown(); // VIZR: guest cores are stopped by now
         core_timing.ClearPendingEvents();
         app_loader.reset();
         audio_core.reset();

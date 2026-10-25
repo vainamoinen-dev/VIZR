@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The lock's facing test from the head. CPlayerMP1::ValidateCurrentOrbitTargetId tests the horizontal
+# eye-to-target direction against column 2 of the body's transform (CActorMP1::GetTransform, the GOC xf); here it gets
+# a 3x4 whose column 2 is the head's flat forward, which the hook runtime writes at main+0x102ae40 ([orbit_head]
+# facing_buffer), with a u32 flag at +0x30 (1 = this frame's head). Without the flag the cave calls the game's own
+# function, so the ball, cutscenes and menus keep the body's facing. So does a grapple: while the arm extends
+# (PL+0x598 != 0, x19 = the player at the call) the cave calls the game's function, and while the lock target is a
+# grapple point the host clears the flag (a facing failure there breaks the grapple). Movement, the body
+# mesh, the camera and the gun read the GOC xf elsewhere and are unchanged. Scratch registers x16, x17 (free across a
+# call).
+# 1. 0xc76894 bl 0xc4ba10 (CActorMP1::GetTransform) -> bl cave 0x102ae00.
+#    Expect at 0xc76884: E0 03 13 AA 08 1C A0 4E 29 1C A1 4E 4A 1C A2 4E 5F 54 FF 97 00 08 40 BD
+# 2. Cave main+0x102ae00..0x102ae23: ldr w16, [x19, #0x598]; cbnz w16, +0x1c; adrp x16, 0x102a000;
+#    add x16, x16, #0xe40; ldr w17, [x16, #0x30]; cbz w17, +12; mov x0, x16; ret; b 0xc4ba10.
+#    The buffer main+0x102ae40..0x102ae73 is the host's.
+#    main+0x102ae00..0x102af7f is zero in this build, clear of every other staged cave.
+@nsobid-67c9ca1428222752f951021464a7b3597eb98fec
+@flag offset_shift 0x100
+@enabled
+00C76894 5BD10E94
+0102AE00 709A45B9F00000351000009010023991113240B971000034E00310AAC0035FD6FC82F017
+@stop

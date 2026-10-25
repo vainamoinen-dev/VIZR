@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <span>
 #include <vector>
 
@@ -38,7 +39,18 @@ struct FramebufferConfig {
     Common::Rectangle<int> crop_rect{};
     BlendMode blending{};
     u32 layer_stack_mask{Service::Nvnflinger::DefaultLayerStackMask};
+    u64 vr_pose_id{}; // VIZR: pose ledger id of the hook camera (0 = none / overlay)
 };
+
+/// VIZR: the frame's pose id. Overlay layers carry 0 and ids only grow, so the largest id
+/// is the game layer's (never "first non-zero").
+inline u64 FramePoseId(std::span<const FramebufferConfig> layers) {
+    u64 id = 0;
+    for (const auto& layer : layers) {
+        id = (std::max)(id, layer.vr_pose_id);
+    }
+    return id;
+}
 
 Common::Rectangle<f32> NormalizeCrop(const FramebufferConfig& framebuffer, u32 texture_width,
                                      u32 texture_height);

@@ -207,6 +207,20 @@
         "repo": "jimmy-park/openssl-cmake",
         "version": "3.6.2"
     },
+    "openxr": {
+        "package": "OpenXR",
+        "repo": "KhronosGroup/OpenXR-SDK",
+        "version": "release-1.1.63",
+        "hash": "efc08571a7c7d82ba637581dcda68b54e5d7e62a48966368d129400d7aad4b5c23822deb4a41f8236a0dc4e280d1f9a059716ac553baabbb2b2c96c5bd292df2",
+        "bundled": true,
+        "options": [
+            "DYNAMIC_LOADER OFF",
+            "BUILD_API_LAYERS OFF",
+            "BUILD_TESTS OFF",
+            "BUILD_CONFORMANCE_TESTS OFF",
+            "BUILD_ALL_EXTENSIONS OFF"
+        ]
+    },
     "opus": {
         "find_args": "MODULE",
         "hash": "9506147b0de35befda8633ff272981cc2575c860874791bd455b752f797fd7dbd1079f0ba42ccdd7bb1fe6773fa5e84b3d75667c2883dd1fb2d0e4a5fa4f8387",
@@ -288,6 +302,13 @@
         "package": "SPIRV-Headers",
         "repo": "KhronosGroup/SPIRV-Headers",
         "version": "vulkan-sdk-1.4.341.0"
+    },
+    "tomlplusplus": {
+        "package": "tomlplusplus",
+        "repo": "marzer/tomlplusplus",
+        "version": "v3.4.0",
+        "hash": "c227fc8147c9459b29ad24002aaf6ab2c42fac22ea04c1c52b283a0172581ccd4527b33c1931e0ef0d1db6b6a53f9e9882c6d4231c7f3494cf070d0220741aa5",
+        "bundled": true
     },
     "tzdb": {
         "artifact": "%VERSION%.tar.gz",

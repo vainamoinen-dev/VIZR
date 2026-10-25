@@ -8,6 +8,7 @@
 
 #include "common/adpf.h"
 #include "common/settings.h"
+#include "common/vizr.h"
 #include "common/thread.h"
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -121,7 +122,9 @@ s64 Conductor::GetNextTicks() const {
         speed_scale = 1.f;
     }
 
-    const f32 effective_fps = 60.f / static_cast<f32>(m_swap_interval);
+    // VIZR: base rate from an enabled profile patch's present_hz (stock 60).
+    const f32 effective_fps = static_cast<f32>(VIZR::g_present_hz.load(std::memory_order_relaxed)) /
+                              static_cast<f32>(m_swap_interval);
     return static_cast<s64>(speed_scale * (1000000000.f / effective_fps));
 }
 
@@ -138,7 +141,9 @@ s64 Conductor::GetFramePeriodNs() const {
     }
     speed_scale /= m_compose_speed_scale;
 
-    const f32 effective_fps = 60.f / static_cast<f32>(m_swap_interval);
+    // VIZR: base rate from an enabled profile patch's present_hz (stock 60).
+    const f32 effective_fps = static_cast<f32>(VIZR::g_present_hz.load(std::memory_order_relaxed)) /
+                              static_cast<f32>(m_swap_interval);
     s64 period = static_cast<s64>(speed_scale * (1000000000.f / effective_fps));
     if (unlocked) {
         period /= UNLOCKED_TARGET_DIVISOR;

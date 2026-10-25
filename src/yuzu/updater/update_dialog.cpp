@@ -76,6 +76,9 @@ UpdateDialog::~UpdateDialog() {
 
 // TODO: migrate to a net.cpp wrapper
 void UpdateDialog::Download() {
+#ifdef VIZR_OFFLINE
+    return; // VIZR: no network requests (the dialog is unreachable in this build: no update checker)
+#endif
     const auto filename = QtCommon::Frontend::GetSaveFileName(
         tr("New Version Location"),
         qApp->applicationDirPath() % QStringLiteral("/") % QString::fromStdString(m_asset.filename),

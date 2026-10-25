@@ -234,7 +234,8 @@ void DeviceMemoryManager<Traits>::Map(DAddr address, VAddr virtual_address, size
         }
         impl->multi_dev_address.Register(new_dev, start_id);
     }
-    t_slot = {};
+    translation_generation.store(translation_epoch.fetch_add(1, std::memory_order_relaxed) + 1,
+                                 std::memory_order_release);
     if (track) {
         TrackContinuityImpl(address, virtual_address, size, asid);
     }
@@ -268,7 +269,8 @@ void DeviceMemoryManager<Traits>::Unmap(DAddr address, size_t size) {
             base_dev = new_start | MULTI_FLAG;
         }
     }
-    t_slot = {};
+    translation_generation.store(translation_epoch.fetch_add(1, std::memory_order_relaxed) + 1,
+                                 std::memory_order_release);
 }
 template <typename Traits>
 void DeviceMemoryManager<Traits>::TrackContinuityImpl(DAddr address, VAddr virtual_address,
@@ -399,14 +401,25 @@ void DeviceMemoryManager<Traits>::WalkBlock(DAddr addr, std::size_t size, auto o
 }
 
 template <typename Traits>
+typename DeviceMemoryManager<Traits>::TranslationCache& DeviceMemoryManager<Traits>::LocalTranslationCache() {
+    thread_local TranslationCache cache;
+    const u64 generation = translation_generation.load(std::memory_order_acquire);
+    if (cache.owner != this || cache.generation != generation) {
+        cache = TranslationCache{.owner = this, .generation = generation};
+    }
+    return cache;
+}
+
+template <typename Traits>
 void DeviceMemoryManager<Traits>::ReadBlock(DAddr address, void* dest_pointer, size_t size) {
     device_inter->FlushRegion(address, size);
     const std::size_t page_offset = address & Memory::YUZU_PAGEMASK;
     if (size <= Memory::YUZU_PAGESIZE - page_offset) {
         const DAddr guest_page = address & ~static_cast<DAddr>(Memory::YUZU_PAGEMASK);
-        for (size_t i = 0; i < 4; ++i) {
-            if (t_slot[i].guest_page == guest_page && t_slot[i].host_ptr != nullptr) {
-                std::memcpy(dest_pointer, t_slot[i].host_ptr + page_offset, size);
+        auto& cache = LocalTranslationCache();
+        for (const TranslationEntry& entry : cache.slot) {
+            if (entry.guest_page == guest_page && entry.host_ptr != nullptr) {
+                std::memcpy(dest_pointer, entry.host_ptr + page_offset, size);
                 return;
             }
         }
@@ -415,8 +428,8 @@ void DeviceMemoryManager<Traits>::ReadBlock(DAddr address, void* dest_pointer, s
         const auto phys_addr = tracked_entries[page_index].compressed_physical_ptr;
         if (phys_addr != 0) {
             auto* const mem_ptr = GetPointerFromRaw<u8>((PAddr(phys_addr - 1) << Memory::YUZU_PAGEBITS));
-            t_slot[cache_cursor % t_slot.size()] = TranslationEntry{.guest_page = guest_page, .host_ptr = mem_ptr};
-            cache_cursor = (cache_cursor + 1) & 3U;
+            cache.slot[cache.cursor] = TranslationEntry{.guest_page = guest_page, .host_ptr = mem_ptr};
+            cache.cursor = (cache.cursor + 1) & 3U;
             std::memcpy(dest_pointer, mem_ptr + page_offset, size);
             return;
         }
@@ -462,9 +475,10 @@ void DeviceMemoryManager<Traits>::ReadBlockUnsafe(DAddr address, void* dest_poin
     const std::size_t page_offset = address & Memory::YUZU_PAGEMASK;
     if (size <= Memory::YUZU_PAGESIZE - page_offset) {
         const DAddr guest_page = address & ~static_cast<DAddr>(Memory::YUZU_PAGEMASK);
-        for (size_t i = 0; i < 4; ++i) {
-            if (t_slot[i].guest_page == guest_page && t_slot[i].host_ptr != nullptr) {
-                std::memcpy(dest_pointer, t_slot[i].host_ptr + page_offset, size);
+        auto& cache = LocalTranslationCache();
+        for (const TranslationEntry& entry : cache.slot) {
+            if (entry.guest_page == guest_page && entry.host_ptr != nullptr) {
+                std::memcpy(dest_pointer, entry.host_ptr + page_offset, size);
                 return;
             }
         }
@@ -473,8 +487,8 @@ void DeviceMemoryManager<Traits>::ReadBlockUnsafe(DAddr address, void* dest_poin
         const auto phys_addr = tracked_entries[page_index].compressed_physical_ptr;
         if (phys_addr != 0) {
             auto* const mem_ptr = GetPointerFromRaw<u8>((PAddr(phys_addr - 1) << Memory::YUZU_PAGEBITS));
-            t_slot[cache_cursor % t_slot.size()] = TranslationEntry{.guest_page = guest_page, .host_ptr = mem_ptr};
-            cache_cursor = (cache_cursor + 1) & 3U;
+            cache.slot[cache.cursor] = TranslationEntry{.guest_page = guest_page, .host_ptr = mem_ptr};
+            cache.cursor = (cache.cursor + 1) & 3U;
             std::memcpy(dest_pointer, mem_ptr + page_offset, size);
             return;
         }

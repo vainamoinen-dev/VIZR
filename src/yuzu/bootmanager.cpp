@@ -49,6 +49,7 @@
 
 #include "common/scm_rev.h"
 #include "common/settings.h"
+#include "common/vizr.h"
 #include "common/settings_input.h"
 #include "core/core.h"
 #include "core/cpu_manager.h"
@@ -430,6 +431,11 @@ void GRenderWindow::keyPressEvent(QKeyEvent* event) {
      * capslock, scroll lock.
      */
     if (!event->isAutoRepeat()) {
+        if (event->key() == Qt::Key_F1 && VIZR::g_xr_active.load(std::memory_order_relaxed)) {
+            // VIZR: F1 opens / closes the in-headset settings menu, only while a VR session runs (with VR off the
+            // request would stay latched and open the menu when a headset starts later).
+            VIZR::g_menu_toggle_request = true;
+        }
         const auto modifier = QtModifierToSwitchModifier(event->modifiers());
         const auto key = QtKeyToSwitchKey(Qt::Key(event->key()));
         input_subsystem->GetKeyboard()->SetKeyboardModifiers(modifier);

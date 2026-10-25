@@ -417,6 +417,9 @@ struct Values {
                                                 true,
                                                 true};
 
+    // VIZR: OpenXR headset output (Vulkan). ON by default; off with no headset is stock Eden.
+    Setting<bool> vr_output{linkage, true, "vr_output", Category::Renderer};
+
     SwitchableSetting<bool> frame_gen{linkage, false, "frame_gen", Category::Renderer,
                                       Specialization::Default, true, false};
 
@@ -934,8 +937,12 @@ struct Values {
     SwitchableSetting<bool> airplane_mode{linkage, true, "airplane_mode", Category::Network};
 
     // WebService
+#ifdef VIZR_OFFLINE
+    Setting<std::string> web_api_url{linkage, "", "web_api_url", Category::WebService}; // VIZR: no web service
+#else
     Setting<std::string> web_api_url{linkage, "api.ynet-fun.xyz", "web_api_url",
                                      Category::WebService};
+#endif
     Setting<std::string> eden_username{linkage, "Eden", "eden_username",
                                        Category::WebService};
     Setting<std::string> eden_token{linkage, "",

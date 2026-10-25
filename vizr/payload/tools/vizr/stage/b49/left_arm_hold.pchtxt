@@ -1,0 +1,12 @@
+@nsobid-67c9ca1428222752f951021464a7b3597eb98fec
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The left arm stays shown (build 49). CGrappleArmMP1::UpdateState, the free-look clip's end: when the clip finishes the
+# game sets the arm state to 10 and clears the shown bit (arm+0x980 = 10, arm+0xa60 &= 0xf6), and the arm is not drawn
+# until the next show. 0xc80674 b.ne 0xc806c4 -> b 0xc806c4: the clip end never hides it.
+# Expect at 0xc80670: 1F 04 00 71 81 02 00 54 60 92 29 91 39 5C FB 97
+# With left_arm_on.pchtxt (re-shows the arm after a grapple) and left_arm_draw.pchtxt (the facing gate).
+@flag offset_shift 0x100
+@enabled
+00C80674 14000014
+@stop

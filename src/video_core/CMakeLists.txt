@@ -225,6 +225,8 @@ add_library(video_core STATIC
     shader_environment.h
     shader_notify.cpp
     shader_notify.h
+    vizr/rig_capture.cpp
+    vizr/rig_capture.h
     smaa_area_tex.h
     smaa_search_tex.h
     surface.cpp
@@ -344,6 +346,36 @@ if (ENABLE_RESHADE)
     target_include_directories(video_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
     target_link_libraries(video_core PRIVATE reshadefx::reshadefx)
     target_compile_definitions(video_core PUBLIC HAS_RESHADE)
+endif()
+
+# VIZR: OpenXR headset output
+if (VIZR_OPENXR)
+    target_sources(video_core PRIVATE
+        renderer_vulkan/openxr/xr_menu.cpp
+        renderer_vulkan/openxr/xr_menu.h
+        renderer_vulkan/openxr/menu_style.h
+        renderer_vulkan/openxr/xr_presenter.cpp
+        renderer_vulkan/openxr/xr_presenter.h
+        renderer_vulkan/openxr/xr_runtime.cpp
+        renderer_vulkan/openxr/xr_runtime.h
+        renderer_vulkan/openxr/xr_runtime_impl.h
+    )
+    target_link_libraries(video_core PRIVATE OpenXR::openxr_loader OpenXR::headers)
+    target_compile_definitions(video_core PUBLIC HAS_VIZR_OPENXR)
+    # VIZR MM: Dear ImGui 1.92.8 (ocornut/imgui 8936b58f), vendored in
+    # externals/imgui; its Vulkan backend loads its functions through Eden's dispatch.
+    set(VIZR_IMGUI ${PROJECT_SOURCE_DIR}/externals/imgui)
+    add_library(vizr_imgui STATIC
+        ${VIZR_IMGUI}/imgui.cpp
+        ${VIZR_IMGUI}/imgui_draw.cpp
+        ${VIZR_IMGUI}/imgui_tables.cpp
+        ${VIZR_IMGUI}/imgui_widgets.cpp
+        ${VIZR_IMGUI}/backends/imgui_impl_vulkan.cpp
+    )
+    target_include_directories(vizr_imgui PUBLIC ${VIZR_IMGUI} ${VIZR_IMGUI}/backends)
+    target_compile_definitions(vizr_imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES IMGUI_DISABLE_DEMO_WINDOWS)
+    target_link_libraries(vizr_imgui PUBLIC Vulkan::Headers)
+    target_link_libraries(video_core PRIVATE vizr_imgui)
 endif()
 
 if (ENABLE_OPENGL)

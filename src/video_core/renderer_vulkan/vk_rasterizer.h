@@ -138,6 +138,9 @@ public:
     void BindChannel(Tegra::Control::ChannelState& channel) override;
 
     void ReleaseChannel(s32 channel_id) override;
+    /// VIZR mode C: the presented image has a held left eye from the current game frame.
+    bool ModeCHeldCurrent(const Tegra::FramebufferConfig& config);
+
     std::optional<FramebufferTextureInfo> AccelerateDisplay(const Tegra::FramebufferConfig& config,
                                                             VAddr framebuffer_addr,
                                                             u32 pixel_stride);

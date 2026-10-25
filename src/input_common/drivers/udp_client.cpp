@@ -155,6 +155,14 @@ UDPClient::ClientConnection::~ClientConnection() = default;
 
 void UDPClient::ReloadSockets() {
     Reset();
+#ifdef VIZR_OFFLINE
+    // VIZR: no socket unless the player turned the UDP (motion) controller on. Upstream starts one per server at every
+    // launch (bound to every interface, polling 127.0.0.1:26760 by default) and only hides the devices when it is off.
+    if (!Settings::values.enable_udp_controller.GetValue()) {
+        LOG_INFO(Input, "UDP controller off: no UDP input socket");
+        return;
+    }
+#endif
 
     std::stringstream servers_ss(Settings::values.udp_input_servers.GetValue());
     std::string server_token;

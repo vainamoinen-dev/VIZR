@@ -20,6 +20,22 @@ void ConvertDepthMode(EmitContext& ctx) {
     ctx.OpStore(ctx.output_position, vector);
 }
 
+/// VIZR M5: HUD scale about the view centre plus the flat layer's constant eye disparity.
+void VIZRFlat(EmitContext& ctx) {
+    const Id type{ctx.F32[1]};
+    const Id position{ctx.OpLoad(ctx.F32[4], ctx.output_position)};
+    const Id x{ctx.OpCompositeExtract(type, position, 0u)};
+    const Id y{ctx.OpCompositeExtract(type, position, 1u)};
+    const Id w{ctx.OpCompositeExtract(type, position, 3u)};
+    const Id scale{ctx.Constant(type, ctx.runtime_info.vizr_flat_scale)};
+    const Id shift{ctx.Constant(type, ctx.runtime_info.vizr_flat_shift)};
+    const Id new_x{ctx.OpFAdd(type, ctx.OpFMul(type, x, scale), ctx.OpFMul(type, w, shift))};
+    const Id new_y{ctx.OpFMul(type, y, scale)};
+    const Id with_x{ctx.OpCompositeInsert(ctx.F32[4], new_x, position, 0u)};
+    const Id vector{ctx.OpCompositeInsert(ctx.F32[4], new_y, with_x, 1u)};
+    ctx.OpStore(ctx.output_position, vector);
+}
+
 void SetFixedPipelinePointSize(EmitContext& ctx) {
     if (ctx.runtime_info.fixed_state_point_size) {
         const float point_size{*ctx.runtime_info.fixed_state_point_size};
@@ -140,6 +156,10 @@ void EmitPrologue(EmitContext& ctx) {
 }
 
 void EmitEpilogue(EmitContext& ctx) {
+    if ((ctx.stage == Stage::VertexB || ctx.stage == Stage::TessellationEval) &&
+        ctx.runtime_info.vizr_flat) {
+        VIZRFlat(ctx);
+    }
     if (ctx.stage == Stage::VertexB && ctx.runtime_info.convert_depth_mode &&
         !ctx.profile.support_native_ndc) {
         ConvertDepthMode(ctx);
@@ -150,6 +170,9 @@ void EmitEpilogue(EmitContext& ctx) {
 }
 
 void EmitEmitVertex(EmitContext& ctx, const IR::Value& stream) {
+    if (ctx.runtime_info.vizr_flat) {
+        VIZRFlat(ctx);
+    }
     if (ctx.runtime_info.convert_depth_mode && !ctx.profile.support_native_ndc) {
         ConvertDepthMode(ctx);
     }

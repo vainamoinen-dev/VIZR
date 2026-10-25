@@ -5,16 +5,22 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <numbers>
 #include <cstddef>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <span>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 #include <bit>
 #include <numeric>
 #include "common/cityhash.h"
+#include "common/logging.h"
+#include "common/vizr.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/thread_worker.h"
@@ -63,7 +69,12 @@ using VideoCommon::FileEnvironment;
 using VideoCommon::GenericEnvironment;
 using VideoCommon::GraphicsEnvironment;
 
-constexpr u32 CACHE_VERSION = 18;
+// Upstream's shader cache version, salted for VIZR: the pipeline key gained vizr_variant (the flat layers), so stock
+// Eden caches are rebuilt once, never misread; an upstream bump and a VIZR change each invalidate the cache. Bump UPSTREAM_CACHE_VERSION with upstream, VIZR_CACHE_REVISION when VIZR's pipelines change.
+constexpr u32 UPSTREAM_CACHE_VERSION = 18;
+constexpr u32 VIZR_CACHE_REVISION = 0x14;
+constexpr u32 CACHE_VERSION = 0x56000000u | (VIZR_CACHE_REVISION << 16) | UPSTREAM_CACHE_VERSION;
+static_assert(UPSTREAM_CACHE_VERSION <= 0xffff && VIZR_CACHE_REVISION <= 0xff);
 constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
 constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
 constexpr std::array<char, 8> VULKAN_CACHE_MAGIC_NUMBER{'y', 'u', 'z', 'u', 'v', 'k', 'c', 'h'};
@@ -153,6 +164,39 @@ Shader::AttributeType AttributeType(const FixedPipelineState& state, size_t inde
     return Shader::AttributeType::Disabled;
 }
 
+/// VIZR M5: scale and clip-space disparity of a flat-layer variant,
+/// from the profile's hud_scale / hud_depth_m and the headset's FOV and IPD (defaults until known).
+std::pair<float, float> VIZRFlatValues(u64 variant) {
+    const VIZR::FlatConfig config = VIZR::g_flat_config.Load();
+    const VIZR::HeadPose head = VIZR::g_latest_head.Load();
+    const float vfov = head.headset_vfov > 0.0f ? head.headset_vfov : 1.64f; // Quest 3 ~94 deg
+    const float ipd = head.ipd_m > 0.0f ? head.ipd_m : 0.064f;
+    // Half-width of the game frame (16:9 spanning the vertical FOV) as a tangent.
+    const float frame_tan = std::tan(vfov * 0.5f) * 16.0f / 9.0f;
+    float scale = config.hud_scale;
+    if (config.hud_fit) {
+        scale = std::min(1.0f, std::tan(config.hud_fit_deg * std::numbers::pi_v<float> / 180.0f) / frame_tan);
+    }
+    // The matched entry's own scale (variant bits 56..61 = entry index + 1).
+    if (const u64 entry = (variant >> 56) & 0x3f; entry != 0 && entry <= config.count &&
+                                                   config.scales[entry - 1] > 0.0f) {
+        scale = config.scales[entry - 1];
+    }
+    if ((variant & VIZR::FlatMenuVariantBit) != 0) {
+        scale = 1.0f; // pause screen and map at full size
+    }
+    // The left eye sees a point straight ahead at depth d shifted right by (ipd / 2) / d.
+    const float shift = (ipd * 0.5f) / (std::max(config.hud_depth_m, 0.1f) * frame_tan);
+    switch (static_cast<VIZR::FlatVariant>(variant & 0xff)) {
+    case VIZR::FlatVariant::Left:
+        return {scale, shift};
+    case VIZR::FlatVariant::Right:
+        return {scale, -shift};
+    default:
+        return {scale, 0.0f};
+    }
+}
+
 Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> programs,
                                     const GraphicsPipelineCacheKey& key,
                                     const Shader::IR::Program& program,
@@ -172,6 +216,23 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
     const bool has_geometry{key.unique_hashes[4] != 0 && !programs[4].is_geometry_passthrough};
     const bool gl_ndc{key.state.ndc_minus_one_to_one != 0};
     const float point_size{std::bit_cast<float>(key.state.point_size)};
+    // VIZR flat layer: only the last pre-rasterisation stage, so a pass-through stage never
+    // applies it twice; never with transform feedback.
+    if (key.vizr_variant != 0) {
+        const bool has_tess_eval{key.unique_hashes[3] != 0};
+        const bool last_pre_raster{(stage == Shader::Stage::Geometry && has_geometry) ||
+                                   (stage == Shader::Stage::TessellationEval && !has_geometry) ||
+                                   (stage == Shader::Stage::VertexB && !has_geometry && !has_tess_eval)};
+        if (last_pre_raster && key.state.xfb_enabled != 0) {
+            LOG_WARNING(Render_Vulkan, "VIZR flat layer: transform feedback pipeline left unchanged (vertex 0x{:016x})",
+                        key.unique_hashes[1]);
+        } else if (last_pre_raster) {
+            const auto [scale, shift] = VIZRFlatValues(key.vizr_variant);
+            info.vizr_flat = true;
+            info.vizr_flat_scale = scale;
+            info.vizr_flat_shift = shift;
+        }
+    }
     switch (stage) {
     case Shader::Stage::VertexB:
         if (!has_geometry) {
@@ -320,6 +381,10 @@ size_t GetTotalPipelineWorkers() {
 }
 
 } // Anonymous namespace
+
+std::pair<float, float> VIZRFlatScaleShift(u64 variant) {
+    return VIZRFlatValues(variant);
+}
 
 size_t ComputePipelineCacheKey::Hash() const noexcept {
     const u64 hash = Common::CityHash64(reinterpret_cast<const char*>(this), sizeof *this);
@@ -562,6 +627,79 @@ PipelineCache::~PipelineCache() {
     }
 }
 
+u64 PipelineCache::VIZRVariant(const std::array<u64, 6>& hashes) {
+    if (!VIZR::g_flat_active.load(std::memory_order_relaxed)) {
+        return 0;
+    }
+    const VIZR::FlatConfig config = VIZR::g_flat_config.Load();
+    bool flat = false;
+    u64 entry = 0; // matched flat_layers entry + 1 (its own scale, VIZRFlatValues)
+    for (const u64 hash : hashes) {
+        if (hash == 0) {
+            continue;
+        }
+        for (u32 i = 0; i < config.count && !flat; ++i) {
+            flat = config.hashes[i] == hash;
+            entry = flat ? i + 1 : 0;
+        }
+    }
+    if (config.finder) {
+        // One live hash at a time is drawn as a flat layer, a new one each second; the
+        // log says which, so a test capture shows which hash moved the HUD.
+        for (const u64 hash : hashes) {
+            if (hash != 0 && finder_seen.try_emplace(hash, true).second) {
+                finder_hashes.push_back(hash);
+            }
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (!finder_hashes.empty() && now - finder_last >= std::chrono::seconds{1}) {
+            finder_last = now;
+            finder_index = (finder_index + 1) % finder_hashes.size();
+            LOG_INFO(Render_Vulkan, "VIZR flat finder: 0x{:016x} is flat now ({}/{})",
+                     finder_hashes[finder_index], finder_index + 1, finder_hashes.size());
+        }
+        if (!finder_hashes.empty()) {
+            flat |= std::ranges::find(hashes, finder_hashes[finder_index]) != hashes.end();
+        }
+    }
+    if (!flat) {
+        return 0;
+    }
+    // Flat layers only on targets of at least half the presented size. Shrinking the draws into the
+    // minimap's own texture (its clear included) left old copies behind (a smear like a dragged
+    // window). Logged once per hash and size.
+    const u32 present_w = VIZR::g_present_guest_width.load(std::memory_order_relaxed);
+    const u32 present_h = VIZR::g_present_guest_height.load(std::memory_order_relaxed);
+    const u32 target_w = maxwell3d->regs.surface_clip.width;
+    const u32 target_h = maxwell3d->regs.surface_clip.height;
+    const bool offscreen = present_w != 0 && (target_w * 2 < present_w || target_h * 2 < present_h);
+    {
+        static std::unordered_set<u64> logged;
+        const auto it = std::ranges::find_if(hashes, [](u64 h) { return h != 0; });
+        const u64 first = it != hashes.end() ? *it : 0;
+        const u64 key = first ^ (u64{target_w} << 40) ^ (u64{target_h} << 20) ^ (offscreen ? 1 : 0);
+        if (logged.insert(key).second) {
+            LOG_INFO(Render_Vulkan, "VIZR flat layer: entry {} (vertex 0x{:016x}) draws into {}x{} (presented {}x{}): {}",
+                     entry, first, target_w, target_h, present_w, present_h,
+                     offscreen ? "offscreen texture, left unchanged" : "flat");
+        }
+    }
+    if (offscreen) {
+        return 0;
+    }
+    const u64 menu = VIZR::HookSilent() ? VIZR::FlatMenuVariantBit : 0;
+    const u64 generation =
+        (VIZR::g_flat_generation.load(std::memory_order_relaxed) << 8) | (entry << 56) | menu;
+    switch (VIZR::g_draw_eye.load(std::memory_order_relaxed)) {
+    case VIZR::Eye::Left:
+        return generation | static_cast<u64>(VIZR::FlatVariant::Left);
+    case VIZR::Eye::Right:
+        return generation | static_cast<u64>(VIZR::FlatVariant::Right);
+    default:
+        return generation | static_cast<u64>(VIZR::FlatVariant::Mono);
+    }
+}
+
 GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
 
     if (!RefreshStages(graphics_key.unique_hashes)) {
@@ -569,6 +707,7 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
         return nullptr;
     }
     graphics_key.state.Refresh(*maxwell3d, dynamic_features);
+    graphics_key.vizr_variant = VIZRVariant(graphics_key.unique_hashes);
 
     if (current_pipeline) {
         GraphicsPipeline* const next{current_pipeline->Next(graphics_key)};
@@ -660,6 +799,9 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     const auto load_graphics{[&](std::ifstream& file, std::vector<FileEnvironment> envs) {
         GraphicsPipelineCacheKey key;
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
+        if (key.vizr_variant != 0) {
+            return; // VIZR: never written; a stray one would carry another session's values
+        }
 
         if ((key.state.extended_dynamic_state != 0) !=
                 dynamic_features.has_extended_dynamic_state ||
@@ -930,7 +1072,8 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
     main_pools.ReleaseContents();
     auto pipeline{
         CreateGraphicsPipeline(main_pools, graphics_key, environments.Span(), nullptr, true)};
-    if (!pipeline || pipeline_cache_filename.empty()) {
+    // VIZR: flat-layer variants bake this session's IPD/FOV/HUD values; never store them.
+    if (!pipeline || pipeline_cache_filename.empty() || graphics_key.vizr_variant != 0) {
         return pipeline;
     }
     serialization_thread.QueueWork([this, key = graphics_key, envs = std::move(environments.envs)] {

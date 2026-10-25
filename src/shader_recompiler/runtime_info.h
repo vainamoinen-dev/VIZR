@@ -90,6 +90,13 @@ struct RuntimeInfo {
     bool convert_depth_mode{};
     bool force_early_z{};
 
+    /// VIZR M5 flat layer (HUD): set only on the last pre-rasterisation stage. The output
+    /// position becomes x' = x * scale + shift * w, y' = y * scale (about the view centre, before
+    /// the depth-mode conversion; z and w untouched).
+    bool vizr_flat{};
+    float vizr_flat_scale{1.0f};
+    float vizr_flat_shift{};
+
     TessPrimitive tess_primitive{};
     TessSpacing tess_spacing{};
     bool tess_clockwise{};

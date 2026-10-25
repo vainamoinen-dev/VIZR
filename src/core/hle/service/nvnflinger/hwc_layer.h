@@ -58,6 +58,7 @@ struct HwcLayer {
     Common::Rectangle<int> crop_rect;
     android::Fence acquire_fence;
     u32 layer_stack_mask;
+    u64 vr_pose_id; // VIZR: from BufferItem; 0 for overlay layers
 };
 
 } // namespace Service::Nvnflinger

@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <memory>
 #include <type_traits>
+#include <utility>
 #include "common/container/unordered_map.h"
 #include <vector>
 
@@ -102,6 +103,10 @@ struct ShaderPools {
     Shader::ObjectPool<Shader::Maxwell::Flow::Block> flow_block{32};
 };
 
+/// VIZR: the flat-layer (scale, NDC x shift) a pipeline variant uses (also for the scissored clears of
+/// flat targets).
+std::pair<float, float> VIZRFlatScaleShift(u64 variant);
+
 class PipelineCache : public VideoCommon::ShaderCache {
 public:
     explicit PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_, const Device& device,
@@ -121,6 +126,9 @@ public:
 
 private:
     [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipelineSlowPath();
+
+    /// VIZR M5: the flat-layer variant of the current stages (0 = an ordinary pipeline).
+    [[nodiscard]] u64 VIZRVariant(const std::array<u64, 6>& hashes);
 
     [[nodiscard]] GraphicsPipeline* BuiltPipeline(GraphicsPipeline* pipeline) const noexcept;
 
@@ -162,6 +170,13 @@ private:
 
     GraphicsPipelineCacheKey graphics_key{};
     GraphicsPipeline* current_pipeline{};
+
+    // VIZR M5 flat-layer finder (VIZR_FLAT_FINDER): every shader hash seen, in order,
+    // and the one flagged flat now (one per second).
+    std::vector<u64> finder_hashes;
+    ::Common::unordered_map<u64, bool> finder_seen;
+    std::size_t finder_index{};
+    std::chrono::steady_clock::time_point finder_last{};
 
     ::Common::unordered_map<ComputePipelineCacheKey, std::unique_ptr<ComputePipeline>> compute_cache;
     ::Common::unordered_map<GraphicsPipelineCacheKey, std::unique_ptr<GraphicsPipeline>> graphics_cache;

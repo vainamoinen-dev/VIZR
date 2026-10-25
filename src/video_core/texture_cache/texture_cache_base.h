@@ -223,6 +223,26 @@ public:
     [[nodiscard]] std::pair<ImageView*, bool> TryFindFramebufferImageView(
         const Tegra::FramebufferConfig& config, DAddr cpu_addr);
 
+    /// VIZR mode C: at the marker-R clear of game frame `frame`, copies the render target
+    /// last written at a presented address this frame (it holds the finished left eye) into its
+    /// held copy. False when there is no such image.
+    bool ModeCHoldLeft(u64 frame);
+
+    /// VIZR mode C: true when the image presented at `cpu_addr` has a held copy from `frame`.
+    bool ModeCHeldCurrent(DAddr cpu_addr, u64 frame);
+
+    /// VIZR: colour target 0 received a flat-layer draw / has received one.
+    void MarkFlatTarget();
+    bool IsFlatTarget();
+
+    /// VIZR mode C: at the marker-L clear (a new frame): forget the last presented target.
+    void ModeCMarkerLeft();
+
+    /// VIZR mode C: TryFindFramebufferImageView for the left eye (the held copy of the
+    /// presented image, same view shape); empty when it has none from the current frame.
+    std::pair<ImageView*, bool> TryFindFramebufferHeldView(const Tegra::FramebufferConfig& config,
+                                                           DAddr cpu_addr);
+
     /// Return true when there are uncommitted images to be downloaded
     [[nodiscard]] bool HasUncommittedFlushes() const noexcept;
 
@@ -499,6 +519,19 @@ private:
     DelayedDestructionRing<Image, TICKS_TO_DESTROY> sentenced_images;
     DelayedDestructionRing<ImageView, TICKS_TO_DESTROY> sentenced_image_view;
     DelayedDestructionRing<Framebuffer, TICKS_TO_DESTROY> sentenced_framebuffers;
+
+    // VIZR mode C: held left copies by original image (slot index) with the game frame each
+    // was taken in, and their presentation views.
+    struct EyeHeld {
+        std::unique_ptr<Image> image;
+        std::unordered_map<u32, std::unique_ptr<ImageView>> views;
+        bool rescaled = false;
+        u64 frame = 0;
+    };
+    std::unordered_map<u32, EyeHeld> eye_held;
+    std::array<DAddr, 4> modec_presented_addrs{}; // the game's presented buffers (newest last)
+    ImageId modec_presented_target{};             // last render target at a presented address, this frame
+    void RetireEyeHeld(u32 image_index);
 
     ::Common::unordered_map<GPUVAddr, ImageAllocId> image_allocs_table;
 

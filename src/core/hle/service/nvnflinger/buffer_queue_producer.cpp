@@ -11,6 +11,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/cpu_features.h"
+#include "common/vizr.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/kernel/k_readable_event.h"
 #include "core/hle/kernel/kernel.h"
@@ -504,6 +505,7 @@ Status BufferQueueProducer::QueueBuffer(s32 slot, const QueueBufferInput& input,
         item.is_droppable = core->dequeue_buffer_cannot_block || async;
         item.swap_interval = swap_interval;
         item.acquire_called = slots[slot].acquire_called;
+        item.vr_pose_id = VIZR::CurrentFrameTag(); // VIZR: pose ledger id
 
         sticky_transform = sticky_transform_;
 

@@ -205,6 +205,11 @@ std::vector<Release> Release::ListFromJson(const std::string_view& json, const s
 }
 
 std::optional<std::string> MakeRequest(const std::string& url, const std::string& path) {
+#ifdef VIZR_OFFLINE
+    // VIZR: no network requests (the update checker, the update dialog and the built-in news are off too).
+    LOG_INFO(Common, "GET {}{} not made: this build makes no network requests", url, path);
+    return std::nullopt;
+#endif
     try {
         constexpr std::size_t timeout_seconds = 15;
 

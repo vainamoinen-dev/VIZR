@@ -1,0 +1,31 @@
+@nsobid-67c9ca1428222752f951021464a7b3597eb98fec
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Mode C per-eye loop. Status: used in every headset session since build 13 (session logs). CGameRendererMP1::RenderScene main+0xf9a2f4: the whole frame block
+# (world, FXAA, HUD, camera filter, letterbox, content->main copy) runs once per eye; loop end at 0xf9a500. Frame 0x70 -> 0x80.
+# Per frame: [eye L: clear colour msg (2^-10,0,2^-10,1) + colour-clear flag msg, whole block] [eye R: (0,2^-10,2^-10,1), whole block].
+# Eye counter in RenderScene stack slot [sp] (unused by the function): 2 = world skipped (no loop), 0 = L, 1 = R; x19/x22 saved at sp+0x70/+0x78.
+# Graphics thread: CGameRenderJob::Execute entry (main+0xb30058) reads the eye from job+0xbfc (clear colour) in command order.
+# Original bytes: main+0xf9a2f4 ffc301d1; 0xf9a31c f30300aa (mov x19,x0); 0xf9a324 770640f9 (ldr x23,[x19,#8]); 0xf9a500 f44f46a9; 0xf9a510 ffc30191.
+# Eye-R skips in RenderPrimaryPass (bl -> trampoline that returns when job+0xc00 == 2^-10): 0xf9d3f8 1c93cc97 CQueryStore::Update,
+# 0xf9d4e0 9655ee97 RenderOcclusionQueries, 0xf9da28 4c55ee97 FeedLastFrameAverageRadianceBackToGame.
+# Execute entry main+0xb30058 ff4302d1 (sub sp,sp,#0x90) -> b 0x102a858: for pass 0/2 calls SetCameraToWorldAndProjectionState(node, node+0x18, node+0x48)
+# on node = *(CScene+0x108) (self copy + frustum rebuild), saving x0-x7/x29/x30. Eden hook PC = 0x102a858 (cave entry; x0 job, x2 scene): write the eye xf/proj into node+0x18/+0x48 there.
+# Cave main+0x102a700..+0x102a8d8. Do not combine with another patch in that range.
+# Pause clock: main+0xfa1488 0028211e (fadd s0,s0,s1 = job+0x1728 += 1/60) -> trampoline that skips the add on eye R.
+# DRS pinned: main+0x1d0e0c8 skDynamicResolutionAllowed 01 -> 00 (GetResolutionScale returns 1.0, IsEnabled false).
+@flag offset_shift 0x100
+@disabled
+00B30058 00EA1314
+00F9A2F4 FF0302D1
+00F9A31C F9400214
+00F9A324 FD400214
+00F9A500 B2400214
+00F9A510 FF030291
+00F9D3F8 06350294
+00F9D4E0 D2340294
+00F9DA28 86330294
+00FA1488 0E250214
+01D0E0C8 00
+0102A700 F30300AA49008052E90300B9F33B00F9F63F00F903BFFD17FF0300B9E90340B9800600100010098BE86300917F14EC97E1630091600640F9B744C897E81740F90821009109FD5F882905005109FD0A88AAFFFF353F010071AC000054E01740F9080040F9080540F900013FD6A98700D029A947F92001403900000032E8630091B414EC97E1630091600640F9A244C897E81740F90821009109FD5F882905005109FD0A88AAFFFF353F010071AC000054E01740F9080040F9080540F900013FD6770640F9D9BEFD17E90340B9C900003529008052E90300B9F33B40F9F63F40F9CFFFFF17F44F46A947BFFD171F2003D50000803A000000000000803A0000803F000000000000803A0000803A0000803F099840B90A50A7523F010A6B40000054125ECA17C0035FD609004CB90A50A7523F010A6B40000054C020EC17C0035FD609004CB90A50A7523F010A6B40000054C221EC17C0035FD609A042B93F0900714000005449020035220200B4498440F9E90100B4FD7BBBA9E00701A9E20F02A9E41703A9E61F04A9E00309AA2161009122210191B7B8C797E00741A9E20F42A9E41743A9E61F44A9FD7BC5A8FF4302D1EB15EC171F2003D51F2003D51F2003D5E9024CB90A50A7523F010A6B400000540028211EEEDAFD17
+@stop

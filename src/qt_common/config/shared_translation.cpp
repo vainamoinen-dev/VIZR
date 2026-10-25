@@ -140,6 +140,10 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Changes the output graphics API.\nVulkan is recommended."));
     INSERT(Settings, vulkan_device, tr("Device:"),
            tr("This setting selects the GPU to use (Vulkan only)."));
+    INSERT(Settings, vr_output, tr("VR headset output (OpenXR)"),
+           tr("Shows the game on a screen in your VR headset (Vulkan only).\n"
+              "Turn the headset on before starting a game; a headset switched on mid-game is "
+              "picked up at the next game launch."));
     INSERT(Settings, resolution_setup, tr("Resolution:"),
            tr("Forces to render at a different resolution.\n"
               "Higher resolutions require more VRAM and bandwidth.\n"

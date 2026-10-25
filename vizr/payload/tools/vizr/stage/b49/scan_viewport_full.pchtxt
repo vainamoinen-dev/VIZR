@@ -1,0 +1,15 @@
+@nsobid-67c9ca1428222752f951021464a7b3597eb98fec
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The world renders full frame in every visor (build 49). The visor's desired viewport scale (GetDesiredViewportScaleX/Y)
+# shrank the world render in the Scan, X-Ray and Thermal visors to a rectangle centred on the screen, which in the
+# headset sits away from the scan box placed in front of the head. Both getters return 1.0: fmov s0, #1.0.
+# 1. GetDesiredViewportScaleX: 0xe61fbc ldr s0, [x19, #0x13c] -> fmov s0, #1.0
+#    Expect at 0xe61fbc: 60 3E 41 BD F4 4F 41 A9 FD 7B C2 A8 C0 03 5F D6
+# 2. GetDesiredViewportScaleY: 0xe6200c ldr s0, [x19, #0x140] -> fmov s0, #1.0
+#    Expect at 0xe6200c: 60 42 41 BD F4 4F 41 A9 FD 7B C2 A8 C0 03 5F D6
+@flag offset_shift 0x100
+@enabled
+00E61FBC 00102E1E
+00E6200C 00102E1E
+@stop

@@ -686,6 +686,12 @@ Queue Device::GetQueue(u32 family_index) const noexcept {
     return Queue(queue, *dld);
 }
 
+Queue Device::GetQueue(u32 family_index, u32 queue_index) const noexcept {
+    VkQueue queue;
+    dld->vkGetDeviceQueue(handle, family_index, queue_index, &queue);
+    return Queue(queue, *dld);
+}
+
 BufferView Device::CreateBufferView(const VkBufferViewCreateInfo& ci) const {
     VkBufferView object;
     Check(dld->vkCreateBufferView(handle, &ci, nullptr, &object));

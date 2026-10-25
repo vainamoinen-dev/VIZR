@@ -23,6 +23,15 @@ void Translate(IR::Block& block, LocationDescriptor descriptor, MemoryReadCodeFu
     bool should_continue = true;
     do {
         const u64 pc = visitor.ir.current_location->PC();
+        // VIZR: a hook PC always starts a block, so the host callback sees all guest state
+        // in the JIT state. Mid-block: end the block here and link to a block at the hook PC.
+        if (visitor.options.is_hook_pc && visitor.options.is_hook_pc(visitor.options.hook_ctx, pc)) {
+            if (block.CycleCount() != 0) {
+                visitor.ir.SetTerm(IR::Term::LinkBlock{*visitor.ir.current_location});
+                break;
+            }
+            visitor.ir.ExceptionRaised(Exception::UserHook);
+        }
         if (const auto instruction = memory_read_code(pc)) {
             if (auto decoder = Decode<TranslatorVisitor, bool>(visitor, *instruction)) {
                 should_continue = *decoder;

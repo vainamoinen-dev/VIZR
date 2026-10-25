@@ -1,8 +1,15 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstdio>
+#include <cstring>
+#include <string>
 #include <QApplication>
+#include "common/scm_rev.h"
 #include "startup_checks.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #if YUZU_ROOM
 #include <cstring>
@@ -77,7 +84,39 @@ static Qt::HighDpiScaleFactorRoundingPolicy GetHighDpiRoundingPolicy() {
 #endif
 }
 
+// VIZR: `eden.exe --version` prints what line 1 of the log names (the fork's branch and commit) and exits before
+// anything starts. Eden is a GUI program on Windows: the text goes to an inherited standard output (a pipe or a file)
+// or, when there is none, to the console of the command prompt that started it.
+static bool PrintVersionAndExit(int argc, char* argv[]) {
+    bool asked = false;
+    for (int i = 1; i < argc; ++i) {
+        asked = asked || std::strcmp(argv[i], "--version") == 0;
+    }
+    if (!asked) {
+        return false;
+    }
+    const std::string text = std::string("VIZR fork ") + Common::g_scm_branch + " " + Common::g_scm_rev + "\n";
+#ifdef _WIN32
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out == nullptr || out == INVALID_HANDLE_VALUE || GetFileType(out) == FILE_TYPE_UNKNOWN) {
+        out = AttachConsole(ATTACH_PARENT_PROCESS)
+                  ? CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr)
+                  : INVALID_HANDLE_VALUE;
+    }
+    if (out != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(out, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+    }
+#else
+    std::fputs(text.c_str(), stdout);
+#endif
+    return true;
+}
+
 int main(int argc, char* argv[]) {
+    if (PrintVersionAndExit(argc, argv)) {
+        return 0;
+    }
 #if YUZU_ROOM
     bool launch_room = false;
     for (int i = 1; i < argc; i++) {

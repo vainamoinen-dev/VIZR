@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Metroid Prime Remastered: game profile (what the game's camera, space and controls mean to the hook runtime).
+# Status: used in every headset session since build 13 (session logs). Values marked [live] were read from the running game.
+format_version = 1
+
+[game]
+title_id = "010012101468C000"
+name     = "Metroid Prime Remastered"
+
+[space]
+up_axis         = "y"               # [live 2026-10-15] engine SCameraState + actor transforms are Y-up (floor y=0.25, eye y=2.75); column 1 = up
+forward_axis    = "+z"              # [live 2026-10-15] column 2 is the view axis and points FORWARD: with -z a test head pitch of +20 looked down while yaw was right (camera frame = R_y(180) of the assumption). With +z, right = forward x up = -x (column 0 points left).
+handedness      = "right"           # [live] det(col0,col1,col2) = +1
+# Live read at spawn: eye is 2.5 units above the player origin, player height field (player+0x4a0) = 2.7.
+# Samus's own rig (CHPR, metre-scale model) has her eyes 1.689 above the feet; 2.50 / 1.689 = 1.48 world units per
+# metre. Cross-check: player height 2.7 / 1.90 m = 1.42.
+units_per_meter = 1.48              # [live + static] live eye height vs rig eye height
+rotation_order  = "zyx"             # unused: camera rotation is stored as a full 3x4 matrix, not Euler
+matrix_layout   = "row_major"       # 12 floats, rows (m00 m01 m02 m03 / m10.. / m20..), translation at m03/m13/m23
+rotation_sense  = "camera_to_world"
+
+# Order matters: first matching `when` wins; anything unmatched = passthrough.
+[[camera]]
+id   = "engine_override"            # engine interpolation/override camera active (doors, scripted transitions)
+mode = "passthrough"
+when = { any_of = [ { not = { field = "engine_interp_cam", is_null = true } },
+                    { not = { field = "engine_override_cam", is_null = true } } ] }
+
+[[camera]]
+id   = "cutscene"                   # either MP1 cinematic list non-empty (= CCameraManagerMP1::IsInCinematicCamera)
+mode = "passthrough"
+when = { any_of = [ { not = { field = "mp1_cine_count_a", equals = 0 } }, { not = { field = "mp1_cine_count_b", equals = 0 } } ] }
+
+[[camera]]
+id      = "gameplay"                # current MP1 camera is CFirstPersonCameraMP1 (all visors: scan/X-ray/thermal/combat)
+mode    = "first_person"
+when    = { field = "mp1_cur_cam_vptr", equals_addr = "main+0x20ee268" }   # _ZTV21CFirstPersonCameraMP1 + 0x10
+# (equivalent: x22 == *(x21+0x80), the manager's first-person camera pointer; see mp1_fp_cam_ptr)
+combine = "game_yaw_plus_head"      # rotation only; game pitch dropped, game yaw kept so the stick still turns
+source  = "cam_xform"
+target  = "cam_xform"               # same memory: read game value first, then write (see address-file note)
+fov     = { target = "cam_fov_rad", kind = "rad_vertical" }
+shake   = "translation_only"
+pose_space = "standing"
+pose_lag_frames = 2                 # [live 2026-10-15] 12/12 probes: the draw runs 2 frames behind the hook (the static estimate was 1)
+height_offset_m = 0.0
+
+# Morph ball (CBallCameraMP1), path cameras, spindle cameras: not matched here -> passthrough (the launcher's staging
+# adds the morph ball camera).
+
+[patches]
+smoothing_off       = { enabled = false } # nothing smooths the final first-person camera rotation except look-pitch easing, which game_yaw_plus_head discards
+rotation_shake_off  = { enabled = true }  # engine shake rotation (+/-5 deg yaw/pitch) is applied AFTER the hook; translation shake kept
+
+[input]
+controller_type   = "pro"
+gyro_source       = "none"
+head_drives_stick = "none"
+recenter          = "left_thumbstick_click"
+layout            = "layouts/prime-remastered.toml"   # Quest Touch -> Pro Controller
+
+[render]
+stereo      = "afr"     # alternate-eye frames; the launcher stages mode C (both eyes drawn every frame) over it
+scale       = "native"  # Eden scale from the headset's per-eye height (launcher, render-scale.ps1)
+hud_scale   = "fit"     # HUD within +/-35 deg (applies to flat_layers; none are listed)
+hud_depth_m = 1.0
+# No flat layers: in mode C the game draws its own HUD in each eye.

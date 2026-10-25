@@ -117,6 +117,7 @@ struct ImageBase {
 
     std::vector<AliasedImage> aliased_images;
     std::vector<ImageId> overlapping_images;
+    bool vizr_flat_target = false; ///< VIZR: a flat-layer (HUD) pipeline drew into this image
     ImageMapId map_view_id{};
 };
 

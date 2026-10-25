@@ -204,8 +204,22 @@ private:
         tracked_entries.GetUnchecked(page_index).cpu_backing_address = address | (asid.id << asid_start_bit);
     }
 
-    std::array<TranslationEntry, 4> t_slot{};
-    u32 cache_cursor = 0;
+    // VIZR: a per-thread translation cache. The shared one (t_slot) raced with Map/Unmap on another
+    // thread: a reset between ReadBlock's null check and its memcpy made it copy from nullptr + the page
+    // offset (a memcpy access violation reading 0x700). Map/Unmap now bump the generation; each thread drops its
+    // cache when it changed. A Map/Unmap between this check and the copy is still possible: the full fix (a lock or
+    // a retry around the copy) belongs upstream, with tests.
+    struct TranslationCache {
+        const void* owner{};
+        u64 generation{};
+        std::array<TranslationEntry, 4> slot{};
+        u32 cursor{};
+    };
+    TranslationCache& LocalTranslationCache();
+    // Generations come from one process-wide counter, so a later manager at the same address never
+    // repeats an {owner, generation} pair a long-lived thread still holds.
+    static inline std::atomic<u64> translation_epoch{0};
+    std::atomic<u64> translation_generation{translation_epoch.fetch_add(1, std::memory_order_relaxed) + 1};
     using CounterType = u8;
     using CounterAtomicType = std::atomic_uint8_t;
     static constexpr size_t subentries = 8 / sizeof(CounterType);

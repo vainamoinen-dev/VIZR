@@ -33,6 +33,9 @@ class ShaderNotify;
 namespace Vulkan {
 
 struct GraphicsPipelineCacheKey {
+    /// VIZR M5 flat-layer variant (0 = none; see VIZR::FlatVariant). First, so Hash()
+    /// and operator== (which read the first Size() bytes) include it.
+    u64 vizr_variant;
     std::array<u64, 6> unique_hashes;
     FixedPipelineState state;
 
@@ -45,7 +48,7 @@ struct GraphicsPipelineCacheKey {
     }
 
     size_t Size() const noexcept {
-        return sizeof(unique_hashes) + state.Size();
+        return sizeof(vizr_variant) + sizeof(unique_hashes) + state.Size();
     }
 };
 static_assert(std::has_unique_object_representations_v<GraphicsPipelineCacheKey>);
@@ -87,6 +90,8 @@ public:
         const std::array<const Shader::Info*, NUM_STAGES>& infos);
 
     bool HasDynamicVertexInput() const noexcept { return key.state.dynamic_vertex_input; }
+    /// VIZR: a flat-layer (HUD) variant.
+    bool VIZRFlat() const noexcept { return (key.vizr_variant & 0xff) != 0; }
     bool SupportsAlphaToCoverage() const noexcept {
         return fragment_has_color0_output;
     }

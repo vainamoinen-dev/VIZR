@@ -120,6 +120,43 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
     return Device(*instance, physical_device, surface, dld);
 }
 
+// VIZR: if Vulkan rejects the extensions the OpenXR runtime asked for, turn XR off and retry
+// once without them, so the default-ON setting can never stop a game from starting.
+static vk::Instance CreateInstanceForXr(OpenXr::Runtime& xr, const Common::DynamicLibrary& library,
+                                 vk::InstanceDispatch& dld, u32 required_version,
+                                 Core::Frontend::WindowSystemType window_type,
+                                 bool enable_validation) {
+    try {
+        return CreateInstance(library, dld, required_version, window_type, enable_validation);
+    } catch (const vk::Exception& exception) {
+        if (!xr.IsActive()) {
+            throw;
+        }
+        xr.Disable(fmt::format("Vulkan rejected XR instance extensions: {}", exception.what()));
+        return CreateInstance(library, dld, required_version, window_type, enable_validation);
+    }
+}
+
+static Device CreateDeviceForXr(OpenXr::Runtime& xr, const vk::Instance& instance,
+                         const vk::InstanceDispatch& dld, VkSurfaceKHR surface) {
+    if (xr.IsActive()) {
+        const std::vector<VkPhysicalDevice> devices = instance.EnumeratePhysicalDevices();
+        const u32 device_index = Settings::values.vulkan_device.GetValue();
+        if (device_index < u32(devices.size())) {
+            xr.CheckPhysicalDevice(*instance, devices[device_index]);
+        }
+    }
+    try {
+        return CreateDevice(instance, dld, surface);
+    } catch (const vk::Exception& exception) {
+        if (!xr.IsActive()) {
+            throw;
+        }
+        xr.Disable(fmt::format("Vulkan rejected XR device extensions: {}", exception.what()));
+        return CreateDevice(instance, dld, surface);
+    }
+}
+
 RendererVulkan::RendererVulkan(Core::Frontend::EmuWindow& emu_window,
                                Tegra::MaxwellDeviceMemoryManager& device_memory_,
                                Tegra::GPU& gpu_,
@@ -131,7 +168,7 @@ try
     , library(OpenLibrary(context.get()))
     , dld()
     // Create raw Vulkan instance first
-    , instance(CreateInstance(*library,
+    , instance(CreateInstanceForXr(xr_runtime, *library,
                             dld,
                             VK_API_VERSION_1_1,
                             render_window.GetWindowInfo().type,
@@ -141,7 +178,7 @@ try
                                                     : vk::DebugUtilsMessenger{})
     // Create surface
     , surface(CreateSurface(instance, render_window.GetWindowInfo()))
-    , device(CreateDevice(instance, dld, *surface))
+    , device(CreateDeviceForXr(xr_runtime, instance, dld, *surface))
     , memory_allocator(device)
     , state_tracker()
     , scheduler(device, state_tracker)
@@ -179,6 +216,8 @@ try
 #ifdef HAS_LSFG
     , frame_gen(memory_allocator, scheduler)
 #endif
+    , xr_presenter(xr_runtime, instance, device, scheduler, memory_allocator, present_manager,
+                   swapchain, device_memory, rasterizer)
 {
 
     if (Settings::values.renderer_force_max_clock.GetValue() && device.ShouldBoostClocks()) {
@@ -197,7 +236,9 @@ try
 }
 
 RendererVulkan::~RendererVulkan() {
+    xr_presenter.Stop(); // VIZR: XR session and swapchain go before anything else
     scheduler.RegisterOnSubmit([] {});
+    std::scoped_lock xr_lock{device.XrQueueMutex()}; // VIZR: the XR queue is host-synced too
     void(device.GetLogical().WaitIdle());
 }
 
@@ -207,6 +248,9 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     };
 
     RenderAppletCaptureLayer(framebuffers);
+
+    // VIZR: before the IsShown() return, so a minimized window does not freeze the headset.
+    xr_presenter.Publish(framebuffers, Tegra::FramePoseId(framebuffers));
 
     if (!render_window.IsShown()) {
         return;

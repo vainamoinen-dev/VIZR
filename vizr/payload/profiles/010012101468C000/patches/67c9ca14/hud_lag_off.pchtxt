@@ -1,0 +1,15 @@
+@nsobid-67c9ca1428222752f951021464a7b3597eb98fec
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# HUD lag off. Status: used in every headset session since build 33 (session logs). Without it the visor floats on a plane in front of the player, on a single axis.
+# CSamusHudMP1::UpdateHudLag (main+0xcaf1d8): the game's "HUD Lag" option (gameState+0x14d) sends the HUD camera through
+# ApplyClassicLag, which lags it behind the first-person camera's rotation; with the head in that camera, the visor
+# swings behind every head turn. This takes the no-lag branch always (the GUI camera = screen shake only); the
+# player's option and the save are untouched.
+# main+0xcaf1dc: cbz w8,#0xcaf440 (28 13 00 34) -> b #0xcaf440 (99 00 00 14).
+# Expect at 0xcaf1d0: 08 4D 43 F9 08 01 40 F9 08 35 45 39 28 13 00 34
+# The launcher's mode C staging copies it into the build's load dir as @enabled.
+@flag offset_shift 0x100
+@enabled
+00CAF1DC 99000014
+@stop

@@ -52,6 +52,8 @@ enum class Exception {
     /// Attempted to execute a code block at an address for which MemoryReadCode returned std::nullopt.
     /// (Intended to be used to emulate memory protection faults.)
     NoExecuteFault,
+    /// VIZR: UserConfig::is_hook_pc matched this PC; raised before the instruction executes.
+    UserHook,
 };
 
 enum class DataCacheOperation {
@@ -241,6 +243,13 @@ struct UserConfig {
     /// When set to true, UserCallbacks::ExceptionRaised will be called when any hint
     /// instruction is executed.
     bool hook_hint_instructions = false;
+
+    /// VIZR: when set and it returns true for a PC, that PC always starts a block and
+    /// UserCallbacks::ExceptionRaised(pc, Exception::UserHook) is called before the instruction
+    /// there executes (all guest state is in the JIT state at that point). Asked only while
+    /// translating. Null = translation unchanged.
+    bool (*is_hook_pc)(void* ctx, std::uint64_t pc) = nullptr;
+    void* hook_ctx = nullptr;
 
     /// Determines what happens if the guest accesses an entry that is off the end of the
     /// page table. If true, Dynarmic will silently mirror page_table's address space. If

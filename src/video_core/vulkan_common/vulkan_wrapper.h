@@ -846,6 +846,11 @@ public:
     constexpr Queue(VkQueue queue_, const DeviceDispatch& dld_) noexcept
         : queue{queue_}, dld{&dld_} {}
 
+    /// VIZR MM: the raw handle (the mod menu's ImGui backend submits on the presenter's queue).
+    VkQueue operator*() const noexcept {
+        return queue;
+    }
+
     VkResult Submit(Span<VkSubmitInfo> submit_infos,
                     VkFence fence = VK_NULL_HANDLE) const noexcept {
         return dld->vkQueueSubmit(queue, submit_infos.size(), submit_infos.data(), fence);
@@ -1050,6 +1055,7 @@ public:
                                        DeviceDispatch& dispatch);
 
     [[nodiscard]] Queue GetQueue(u32 family_index) const noexcept;
+    [[nodiscard]] Queue GetQueue(u32 family_index, u32 queue_index) const noexcept; // VIZR
 
     [[nodiscard]] BufferView CreateBufferView(const VkBufferViewCreateInfo& ci) const;
 

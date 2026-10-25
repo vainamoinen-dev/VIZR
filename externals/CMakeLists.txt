@@ -265,6 +265,14 @@ endif()
 # VMA
 AddJsonPackage(vulkan-memory-allocator)
 
+# VIZR: OpenXR loader (static) and headers
+if (VIZR_OPENXR)
+    AddJsonPackage(openxr)
+endif()
+
+# VIZR: TOML parser for game profiles (header-only)
+AddJsonPackage(tomlplusplus)
+
 if (VulkanMemoryAllocator_ADDED)
     if (CXX_CLANG)
         target_compile_options(VulkanMemoryAllocator INTERFACE

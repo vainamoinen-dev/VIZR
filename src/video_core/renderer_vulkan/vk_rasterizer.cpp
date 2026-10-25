@@ -6,8 +6,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <unordered_set>
 
 #include <fmt/format.h>
 
@@ -17,6 +20,7 @@
 #include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "common/vizr.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/control/channel_state.h"
@@ -250,6 +254,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
     pipeline->SetEngine(maxwell3d, gpu_memory);
     if (!pipeline->Configure(is_indexed))
         return;
+    if (pipeline->VIZRFlat()) {
+        texture_cache.MarkFlatTarget(); // its scissored clears follow the flat transform
+    }
 
     UpdateDynamicStates();
 
@@ -409,6 +416,31 @@ void RasterizerVulkan::Clear(u32 layer_count) {
     if (!use_color && !use_depth && !use_stencil) {
         return;
     }
+    // VIZR mode C: each eye's world pass starts with a colour clear in its
+    // marker colour. At eye R's, the presented image still holds the finished left eye: copy it
+    // first (GPU order: before anything of eye R).
+    if (use_color && VIZR::g_stereo_mode.load(std::memory_order_relaxed) == VIZR::StereoMode::ModeC) {
+        const std::array<float, 4> colour{regs.clear_color[0], regs.clear_color[1], regs.clear_color[2],
+                                          regs.clear_color[3]};
+        // Flat layers (HUD) drawn from here on are this eye's.
+        if (colour == VIZR::g_modec_marker_left) {
+            VIZR::g_modec_frame.fetch_add(1, std::memory_order_relaxed);
+            VIZR::g_modec_stats.markers_l.fetch_add(1, std::memory_order_relaxed);
+            VIZR::g_draw_eye = VIZR::Eye::Left;
+            std::scoped_lock lock{texture_cache.mutex};
+            texture_cache.ModeCMarkerLeft();
+        } else if (colour == VIZR::g_modec_marker_right) {
+            VIZR::g_modec_stats.markers_r.fetch_add(1, std::memory_order_relaxed);
+            VIZR::g_draw_eye = VIZR::Eye::Right;
+            std::scoped_lock lock{texture_cache.mutex};
+            texture_cache.UpdateRenderTargets(true);
+            if (texture_cache.ModeCHoldLeft(VIZR::g_modec_frame.load(std::memory_order_relaxed))) {
+                VIZR::g_modec_stats.held_copies.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                VIZR::g_modec_stats.no_hold.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
 
     std::scoped_lock lock{texture_cache.mutex};
     texture_cache.UpdateRenderTargets(true);
@@ -484,6 +516,47 @@ void RasterizerVulkan::Clear(u32 layer_count) {
     if (!clamp_rect_to_render_area(clear_rect.rect)) {
         return;
     }
+    // VIZR: a scissored clear on a target that flat layers (HUD) draw into also clears the rectangle
+    // the flat transform maps it to. The HUD target persists and the game clears only the minimap's
+    // own rectangle; the fit moves the minimap out of it, so without this old copies pile up. Logged
+    // once per rectangle size.
+    std::optional<VkClearRect> flat_rect;
+    if (regs.clear_control.use_scissor && VIZR::g_flat_active.load(std::memory_order_relaxed) &&
+        texture_cache.IsFlatTarget()) {
+        const auto eye = VIZR::g_draw_eye.load(std::memory_order_relaxed);
+        const u64 variant = (VIZR::HookSilent() ? VIZR::FlatMenuVariantBit : 0) |
+                            static_cast<u64>(eye == VIZR::Eye::Left    ? VIZR::FlatVariant::Left
+                                             : eye == VIZR::Eye::Right ? VIZR::FlatVariant::Right
+                                                                           : VIZR::FlatVariant::Mono);
+        const auto [scale, shift] = VIZRFlatScaleShift(variant);
+        const auto map = [](float pixel, float size, float s, float t) {
+            return ((pixel / size * 2.0f - 1.0f) * s + t + 1.0f) * 0.5f * size;
+        };
+        const float w = static_cast<float>(render_area.width);
+        const float h = static_cast<float>(render_area.height);
+        const auto& r = clear_rect.rect;
+        const float x0 = map(static_cast<float>(r.offset.x), w, scale, shift);
+        const float x1 = map(static_cast<float>(r.offset.x + s32(r.extent.width)), w, scale, shift);
+        const float y0 = map(static_cast<float>(r.offset.y), h, scale, 0.0f);
+        const float y1 = map(static_cast<float>(r.offset.y + s32(r.extent.height)), h, scale, 0.0f);
+        VkClearRect mapped = clear_rect;
+        mapped.rect.offset = {static_cast<s32>(std::floor(x0)), static_cast<s32>(std::floor(y0))};
+        mapped.rect.extent = {static_cast<u32>(std::max(0.0f, std::ceil(x1) - std::floor(x0))),
+                              static_cast<u32>(std::max(0.0f, std::ceil(y1) - std::floor(y0)))};
+        if (clamp_rect_to_render_area(mapped.rect) &&
+            (mapped.rect.offset.x != r.offset.x || mapped.rect.offset.y != r.offset.y)) {
+            flat_rect = mapped;
+        }
+        static std::unordered_set<u64> logged;
+        if (logged.insert((u64{r.extent.width} << 32) | r.extent.height).second) {
+            LOG_INFO(Render_Vulkan,
+                     "VIZR flat target: scissored clear {}x{} at ({},{}) on {}x{} (colour {} depth {}) -> also {}x{} at ({},{})",
+                     r.extent.width, r.extent.height, r.offset.x, r.offset.y, render_area.width, render_area.height,
+                     use_color, use_depth, flat_rect ? flat_rect->rect.extent.width : 0,
+                     flat_rect ? flat_rect->rect.extent.height : 0, flat_rect ? flat_rect->rect.offset.x : 0,
+                     flat_rect ? flat_rect->rect.offset.y : 0);
+        }
+    }
 
     const bool clear_covers_render_area =
         clear_rect.rect.offset.x == 0 && clear_rect.rect.offset.y == 0 &&
@@ -522,13 +595,16 @@ void RasterizerVulkan::Clear(u32 layer_count) {
             if (can_defer_clear) {
                 scheduler.DeferColorClear(framebuffer, color_attachment, clear_value);
             } else {
-                scheduler.Record([color_attachment, clear_value, clear_rect](vk::CommandBuffer cmdbuf) {
+                scheduler.Record([color_attachment, clear_value, clear_rect, flat_rect](vk::CommandBuffer cmdbuf) {
                     const VkClearAttachment attachment{
                         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                         .colorAttachment = color_attachment,
                         .clearValue = clear_value,
                     };
                     cmdbuf.ClearAttachments(attachment, clear_rect);
+                    if (flat_rect) {
+                        cmdbuf.ClearAttachments(attachment, *flat_rect);
+                    }
                 });
             }
         } else {
@@ -538,6 +614,13 @@ void RasterizerVulkan::Clear(u32 layer_count) {
                 Offset2D{.x = clear_rect.rect.offset.x + s32(clear_rect.rect.extent.width),
                          .y = clear_rect.rect.offset.y + s32(clear_rect.rect.extent.height)}};
             blit_image.ClearColor(framebuffer, color_mask, regs.clear_color, dst_region);
+            if (flat_rect) {
+                const Region2D flat_region = {
+                    Offset2D{.x = flat_rect->rect.offset.x, .y = flat_rect->rect.offset.y},
+                    Offset2D{.x = flat_rect->rect.offset.x + s32(flat_rect->rect.extent.width),
+                             .y = flat_rect->rect.offset.y + s32(flat_rect->rect.extent.height)}};
+                blit_image.ClearColor(framebuffer, color_mask, regs.clear_color, flat_region);
+            }
         }
     }
 
@@ -571,13 +654,16 @@ void RasterizerVulkan::Clear(u32 layer_count) {
         scheduler.DeferDepthStencilClear(framebuffer, ds_value);
     } else {
         scheduler.Record([clear_depth = regs.clear_depth, clear_stencil = regs.clear_stencil,
-                          clear_rect, aspect_flags](vk::CommandBuffer cmdbuf) {
+                          clear_rect, flat_rect, aspect_flags](vk::CommandBuffer cmdbuf) {
             VkClearAttachment attachment;
             attachment.aspectMask = aspect_flags;
             attachment.colorAttachment = 0;
             attachment.clearValue.depthStencil.depth = clear_depth;
             attachment.clearValue.depthStencil.stencil = clear_stencil;
             cmdbuf.ClearAttachments(attachment, clear_rect);
+            if (flat_rect) {
+                cmdbuf.ClearAttachments(attachment, *flat_rect); // the flat-mapped rectangle too
+            }
         });
     }
 }
@@ -949,6 +1035,12 @@ void RasterizerVulkan::AccelerateInlineToMemory(GPUVAddr address, size_t copy_si
     query_cache.InvalidateRegion(*cpu_addr, copy_size);
 }
 
+bool RasterizerVulkan::ModeCHeldCurrent(const Tegra::FramebufferConfig& config) {
+    std::scoped_lock lock{texture_cache.mutex};
+    return texture_cache.ModeCHeldCurrent(config.address + config.offset,
+                                          VIZR::g_modec_frame.load(std::memory_order_relaxed));
+}
+
 std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
     const Tegra::FramebufferConfig& config, DAddr framebuffer_addr, u32 pixel_stride) {
     if (!framebuffer_addr) {
@@ -956,8 +1048,12 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
     }
     std::scoped_lock lock{texture_cache.mutex};
     const auto [image_view, scaled] =
-        texture_cache.TryFindFramebufferImageView(config, framebuffer_addr);
+        VIZR::g_modec_present_held ? texture_cache.TryFindFramebufferHeldView(config, framebuffer_addr)
+                                       : texture_cache.TryFindFramebufferImageView(config, framebuffer_addr);
     if (!image_view) {
+        if (VIZR::g_modec_present_held) {
+            VIZR::g_modec_stats.held_miss.fetch_add(1, std::memory_order_relaxed);
+        }
         return {};
     }
 

@@ -919,7 +919,21 @@ void IGeneralService::SetWirelessCommunicationEnabled(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const u8 enable = rp.Pop<u8>();
 
+#ifdef VIZR_OFFLINE
+    // VIZR: a title never turns airplane mode off (it would lift the socket and name-lookup refusals); turning it on
+    // is kept. Only the player's own setting turns it off.
+    if (enable != 0) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            LOG_WARNING(Service_NIFM, "SetWirelessCommunicationEnabled(1) ignored: airplane mode stays as the player set it");
+        }
+    } else {
+        Settings::values.airplane_mode.SetValue(true);
+    }
+#else
     Settings::values.airplane_mode.SetValue(enable == 0);
+#endif
 
     IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
 }

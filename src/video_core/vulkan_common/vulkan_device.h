@@ -7,6 +7,8 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -285,6 +287,22 @@ public:
     /// Returns the main present queue.
     vk::Queue GetPresentQueue() const {
         return present_queue;
+    }
+
+    /// VIZR: the OpenXR thread's own graphics queue (index 1) when the family
+    /// has one to spare; otherwise this is the graphics queue (index 0) and HasOwnXrQueue() is false.
+    vk::Queue GetXrQueue() const {
+        return xr_queue;
+    }
+    u32 GetXrQueueIndex() const {
+        return xr_queue_index;
+    }
+    bool HasOwnXrQueue() const {
+        return xr_queue_index != 0;
+    }
+    /// Host sync for the XR queue (vkQueueSubmit, the runtime's XR calls, vkDeviceWaitIdle).
+    std::mutex& XrQueueMutex() const {
+        return *xr_queue_mutex;
     }
 
     /// Returns main graphics queue family index.
@@ -1151,6 +1169,9 @@ private:
     vk::Device logical;          ///< Logical device.
     vk::Queue graphics_queue;    ///< Main graphics queue.
     vk::Queue present_queue;     ///< Main present queue.
+    vk::Queue xr_queue;          ///< VIZR: the OpenXR thread's queue (see GetXrQueue).
+    u32 xr_queue_index = 0;      ///< VIZR: 1 = own queue, 0 = shares the graphics queue.
+    std::unique_ptr<std::mutex> xr_queue_mutex = std::make_unique<std::mutex>(); ///< VIZR
     vk::PipelineCache static_pipeline_cache;
     bool owns_static_pipeline_cache{};
     u32 instance_version{};      ///< Vulkan instance version.

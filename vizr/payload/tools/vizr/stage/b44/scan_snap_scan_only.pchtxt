@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Status: measured in an automated test on build 44: the view snap toward a scan lock is 0.06 deg with it, 13.2 deg
+# without (build record).
+# Scan Visor only: no camera or body turn toward a scan lock. Combat lock-on and the grapple keep the game's own turn.
+# Each site is the game's read of the player's orbit state (PL+0x4e0); its cave reads the current visor (PS+0x18, the
+# player state through the GOT slot main+0x2122698, as CStateManagerGameLogicMP1::GetPlayerState does) and, in the
+# Scan Visor (2) with a lock (states 1-4), takes the no-lock path. Scratch registers x16, x17. Caves main+0x102ad00..
+# 0x102adbc (zero in this build; clear of every other staged cave).
+# 1. CPlayerMP1::UpdateOrbitOrientation, the body-yaw turn: 0xc7789c b.hs 0xc7796c -> b cave 0x102ad00.
+#    Expect at 0xc7788c: 08 E0 44 B9 09 05 00 51 F3 03 00 AA 3F 11 00 71 82 06 00 54
+# 2. CFirstPersonCameraMP1::UpdateTransform, the look-direction table: 0xd714c8 ldr w8, [x20, #0x4e0] -> b cave
+#    0x102ad40 (w8 = 0 in the Scan Visor: the state-0 entry).
+#    Expect at 0xd714c8: 88 E2 44 B9 1F 11 00 71 E8 05 00 54 A9 7D 00 D0
+# 3. The same function's turn table: 0xd7170c ldr w8, [x20, #0x4e0] -> b cave 0x102ad80 (w8 = 0: the default path).
+#    Expect at 0xd7170c: 88 E2 44 B9 08 05 00 51 1F 11 00 71 28 29 00 54
+# Not patched: the lock look-adjust read at 0xd71634 (its effect is not decoded).
+@nsobid-67c9ca1428222752f951021464a7b3597eb98fec
+@flag offset_shift 0x100
+@enabled
+00C7789C 19CD0E14
+00D714C8 1EE60A14
+00D7170C 9DE50A14
+0102AD00 430000541A33F117D0870090104E43F9100240F9F00000B4101240F9B00000B4101A40B91F0A0071410000541033F117DC32F117
+0102AD40 88E244B9110500513F0E007148010054D0870090104E43F9100240F9D00000B4101240F9900000B4101A40B91F0A0071E803881AD619F517
+0102AD80 88E244B9110500513F0E007148010054D0870090104E43F9100240F9D00000B4101240F9900000B4101A40B91F0A0071E803881A571AF517
+@stop

@@ -18,6 +18,7 @@
 #include "core/frontend/emu_window.h"
 #include "video_core/vulkan_common/vulkan_instance.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#include "video_core/renderer_vulkan/openxr/xr_runtime.h"
 
 namespace Vulkan {
 namespace {
@@ -138,8 +139,10 @@ vk::Instance CreateInstance(const Common::DynamicLibrary& library, vk::InstanceD
         LOG_ERROR(Render_Vulkan, "Failed to query instance extension properties");
         throw vk::Exception(VK_ERROR_EXTENSION_NOT_PRESENT);
     }
-    std::vector<const char*> const extensions =
+    std::vector<const char*> extensions =
         RequiredExtensions(dld, *properties, window_type, enable_validation);
+    // VIZR: extensions the OpenXR runtime asked for (empty when XR is off)
+    OpenXr::AppendUnique(extensions, OpenXr::RequiredInstanceExtensions());
     if (!AreExtensionsSupported(dld, *properties, extensions))
         throw vk::Exception(VK_ERROR_EXTENSION_NOT_PRESENT);
     std::vector<const char*> layers = Layers(enable_validation);

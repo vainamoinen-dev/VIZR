@@ -1160,6 +1160,14 @@ add_library(core STATIC
     perf_stats.h
     reporter.cpp
     reporter.h
+    vizr/hook_runtime.cpp
+    vizr/hook_runtime.h
+    vizr/profile.cpp
+    vizr/profile_migrate.cpp
+    vizr/profile_migrate.h
+    vizr/profile.h
+    vizr/user_settings.cpp
+    vizr/user_settings.h
     tools/freezer.cpp
     tools/freezer.h
     tools/renderdoc.cpp
@@ -1220,6 +1228,7 @@ target_link_libraries(core PRIVATE
     fmt::fmt
     nlohmann_json::nlohmann_json
     RenderDoc::API
+    tomlplusplus::tomlplusplus # VIZR: game profiles
     ZLIB::ZLIB)
 
 target_link_libraries(core PUBLIC httplib::httplib zstd::zstd)

@@ -223,6 +223,9 @@ void Init(QWidget* root) {
     Common::Log::Initialize();
     Common::Log::Start();
 
+    // VIZR: first log line proves which fork build is running (QA build proof).
+    LOG_INFO(Frontend, "VIZR fork {} {}", Common::g_scm_branch, Common::g_scm_rev);
+
     Network::Init();
 
     QtCommon::Meta::RegisterMetaTypes();

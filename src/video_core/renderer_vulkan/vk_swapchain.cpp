@@ -16,6 +16,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
+#include "common/vizr.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/vulkan_common/vk_enum_string_helper.h"
@@ -41,11 +42,21 @@ VkSurfaceFormatKHR ChooseSwapSurfaceFormat(vk::Span<VkSurfaceFormatKHR> formats)
     return found != formats.end() ? *found : formats[0];
 }
 
+static bool VIZRUnblockedDesktop() {
+    return VIZR::g_xr_active.load(std::memory_order_relaxed) ||
+           VIZR::g_present_hz.load(std::memory_order_relaxed) > 60;
+}
+
 static VkPresentModeKHR ChooseSwapPresentMode(bool has_imm, bool has_mailbox,
                                               bool has_fifo_relaxed) {
     // Mailbox doesn't lock the application like FIFO (vsync)
     // FIFO present mode locks the framerate to the monitor's refresh rate
     Settings::VSyncMode setting = [has_imm, has_mailbox]() {
+        // VIZR: with VR output (or a present_hz patch) the headset paces the game, so the
+        // desktop window must never block it at the monitor's rate (FIFO held a 120 Hz headset to 60).
+        if (VIZRUnblockedDesktop() && (has_mailbox || has_imm)) {
+            return has_mailbox ? Settings::VSyncMode::Mailbox : Settings::VSyncMode::Immediate;
+        }
         // Choose Mailbox or Immediate if unlocked and those modes are supported
         const auto mode = Settings::values.vsync_mode.GetValue();
         if (Settings::values.frame_gen.GetValue()) {
@@ -264,6 +275,8 @@ void Swapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities) {
     const VkCompositeAlphaFlagBitsKHR alpha_flags{ChooseAlphaFlags(capabilities)};
     surface_format = ChooseSwapSurfaceFormat(formats);
     present_mode = ChooseSwapPresentMode(has_imm, has_mailbox, has_fifo_relaxed);
+    LOG_INFO(Render_Vulkan, "VIZR desktop present mode {}{}", string_VkPresentModeKHR(present_mode),
+             VIZRUnblockedDesktop() ? " (forced: VR output / present_hz, the headset paces the game)" : "");
 
     u32 requested_image_count{capabilities.minImageCount + 1};
     // Ensure Triple buffering if possible.

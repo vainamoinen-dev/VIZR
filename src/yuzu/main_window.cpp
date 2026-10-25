@@ -4,12 +4,14 @@
 // Static Qt on macOS doesn't use Vulkan
 // Other platforms do, and thus have conflicting VulkanMemoryAllocator symbols
 #include "core/launch_params.h"
+#include "common/vizr.h" // VIZR
 #if defined(QT_STATICPLUGIN) && !defined(__APPLE__)
 #undef VMA_IMPLEMENTATION
 #endif
 
 #include <boost/algorithm/string/split.hpp>
 #include "common/fs/path_util.h"
+#include "input_common/drivers/virtual_gamepad.h" // VIZR
 #include "common/settings.h"
 #include "common/settings_enums.h"
 #include "frontend_common/settings_generator.h"
@@ -356,6 +358,23 @@ inline static bool isDarkMode() {
 }
 #endif // _WIN32
 
+// VIZR: called on the OpenXR thread when the Touch -> Pro Controller state changes.
+static std::weak_ptr<InputCommon::InputSubsystem> g_vizr_input;
+
+static void VizrGamepadSink(const VIZR::ProPad& pad) {
+    const auto input = g_vizr_input.lock();
+    auto* gamepad = input ? input->GetVirtualGamepad() : nullptr;
+    if (gamepad == nullptr) {
+        return;
+    }
+    constexpr std::size_t Player1 = 0;
+    for (int button = 0; button <= static_cast<int>(VIZR::ProTarget::DDown); ++button) {
+        gamepad->SetButtonState(Player1, button, ((pad.buttons >> button) & 1u) != 0);
+    }
+    gamepad->SetStickPosition(Player1, InputCommon::VirtualGamepad::VirtualStick::Left, pad.lx, pad.ly);
+    gamepad->SetStickPosition(Player1, InputCommon::VirtualGamepad::VirtualStick::Right, pad.rx, pad.ry);
+}
+
 MainWindow::MainWindow(bool has_broken_vulkan)
     : ui{std::make_unique<Ui::MainWindow>()},
       input_subsystem{std::make_shared<InputCommon::InputSubsystem>()}, user_data_migrator{this} {
@@ -516,6 +535,11 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     // to prevent the UI from blowing up.
     UpdateUITheme();
 
+    // VIZR: Touch controllers reach player 1 through Eden's virtual gamepad,
+    // which every emulated controller already listens to. No controller setting is changed.
+    g_vizr_input = input_subsystem;
+    VIZR::g_gamepad_sink.store(&VizrGamepadSink, std::memory_order_release);
+
     if (QStringList args = QApplication::arguments(); args.size() >= 2) {
         QList<QByteArray> qba{};
         for (auto const& e : args)
@@ -525,6 +549,15 @@ MainWindow::MainWindow(bool has_broken_vulkan)
             args_cstr.push_back(e.data());
 
         auto const lp = Core::ParseLaunchParams(*QtCommon::system, args_cstr.size(), args_cstr.data(), nullptr);
+
+        // VIZR: the Qt frontend never calls ApplyLaunchParams, so apply our flags here,
+        // before BootGame creates the renderer (and with it the OpenXR pre-query).
+        if (lp.no_vr) {
+            VIZR::g_no_vr_flag = true;
+        }
+        if (lp.vr_test_roll) {
+            VIZR::g_test_roll_flag = true;
+        }
 
         // Override fullscreen setting if gamepath or argument is provided
         if (!lp.filepath.empty() || lp.fullscreen) {
@@ -981,8 +1014,12 @@ void MainWindow::InitializeWidgets() {
     firmware_label->setFocusPolicy(Qt::NoFocus);
     statusBar()->addPermanentWidget(firmware_label);
 
+#ifndef VIZR_OFFLINE
     statusBar()->addPermanentWidget(multiplayer_state->GetStatusText(), 0);
     statusBar()->addPermanentWidget(multiplayer_state->GetStatusIcon(), 0);
+#else
+    ui->menu_Multiplayer->menuAction()->setVisible(false); // VIZR: no rooms (the status widgets stay unshown)
+#endif
 
     tas_label = new QLabel();
     tas_label->setObjectName(QStringLiteral("TASlabel"));

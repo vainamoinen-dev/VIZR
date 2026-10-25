@@ -1,0 +1,19 @@
+@nsobid-67c9ca1428222752f951021464a7b3597eb98fec
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Head-bob ROTATION off. Status: used in every headset session since build 33 (session logs). Metroid Prime Remastered v1.0.0 main.
+# CPlayerCameraBobMP1::GetCameraBobTransformation() const  (_ZNK19CPlayerCameraBobMP126GetCameraBobTransformationEv) main+0xd0b2d4
+# Original copies the bob 3x4 at this+0x2c = Translate(walk/landing bob) x view-wander rotation (+0xd4) x landing dip.
+# New: return identity rotation with the original translation column (m03/m13/m23 at this+0x38/+0x48/+0x58), so
+# translation bob stays (as with the shake patch) and the ~2.6 deg view-wander yaw/pitch is gone.
+# Callers (all get the same result): CFirstPersonCameraMP1::UpdateTransform, CPlayerGunMP1::Update, CPlayerMP1::GetHUDOrbitTargetPosition.
+# Original bytes main+0xd0b2d4: 09 c0 42 f8 0a 40 43 f8   (ldur x9,[x0,#0x2c]; ldur x10,[x0,#0x34])
+# Patch: main+0xd0b2d4 b main+0x102a500 ; cave main+0x102a500 (zero padding after .text, RX):
+#   mov w9,#1.0 ; ldr w10,[x0,#0x38] ; ldr w11,[x0,#0x48] ; ldr w12,[x0,#0x58]
+#   stp w9,wzr,[x8] ; stp wzr,w10,[x8,#8] ; stp wzr,w9,[x8,#0x10] ; stp wzr,w11,[x8,#0x18] ; stp wzr,wzr,[x8,#0x20] ; stp w9,w12,[x8,#0x28] ; ret
+# Hex below is in file byte order. Do not enable together with another patch that uses main+0x102a500..+0x52c.
+@flag offset_shift 0x100
+@enabled
+00D0B2D4 8B7C0C14
+0102A500 09F0A7520A3840B90B4840B90C5840B9097D00291F2901291F2502291F2D03291F7D042909310529C0035FD6
+@stop

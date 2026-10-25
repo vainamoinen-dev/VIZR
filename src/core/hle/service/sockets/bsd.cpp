@@ -541,6 +541,14 @@ std::pair<s32, Errno> BSD_USA::SocketImpl(Domain domain, Type type, Protocol pro
         return {-1, Errno::MFILE};
     }
 
+#ifdef VIZR_OFFLINE
+    // VIZR: airplane mode (the default) refuses every socket type before a host socket is created; upstream refuses
+    // only connection-based ones, after creating it.
+    if (Settings::values.airplane_mode.GetValue()) {
+        LOG_ERROR(Service, "Airplane mode is enabled, cannot create socket");
+        return {-1, Errno::NOTCONN};
+    }
+#endif
     file_descriptors[fd] = FileDescriptor{};
     FileDescriptor& descriptor = *file_descriptors[fd];
     // ENONMEM might be thrown here

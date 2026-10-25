@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Metroid Prime Remastered: Quest Touch -> Pro Controller. The Pro Controller buttons are the game's own
+# (Options > Controls); the launcher's staging adds the head gestures and the beam chord below.
+format_version = 1
+
+[map]
+right_trigger     = "zr"            # fire beam / bomb; hold to charge
+right_grip        = "r"             # missile
+right_a           = "b"             # JUMP (headset feedback: A = jump)
+right_b           = "plus"          # MAP view (headset feedback: B = map)
+right_stick_click = "rstick_click"  # free (menus confirm/back via [map.menu])
+left_trigger      = "zl"            # lock-on / grapple / scan
+left_grip         = "l"             # L
+left_x            = "y"             # MORPH BALL (headset feedback: X = morph ball)
+left_y            = "x"             # SWAP SELECT hold (headset feedback: Y = swap select; the hand-on-cannon gesture replaces it later)
+left_menu         = "minus"         # pause menu (the game: Minus = Pause, Plus = Map)
+left_stick_click  = "recenter"      # game.toml [input] recenter; never sent to the game
+right_stick       = "rstick"
+left_stick        = "lstick"
+
+[chords]                            # hold the left trigger: ZL keeps locking on; a left-stick flick presses the D-pad
+modifier          = "left_trigger"
+modifier_mode     = "hold"          # "hold": the modifier's own [map] target is still sent while held; a flick made
+                                    # while it is held latches its D-pad direction until the stick returns (< 0.5),
+                                    # a button chord until the button is released; no stick is suppressed.
+                                    # "tap" (the old default): modifier swallowed while held, sent as a tap on release.
+left_stick_up     = "dpad_up"       # Combat visor (in-game D-pad: Up = Combat, Right = Scan; hold X = beams instead)
+left_stick_down   = "dpad_down"
+left_stick_left   = "dpad_left"
+left_stick_right  = "dpad_right"      # Scan visor
+right_stick_click = "none"          # map moved to B (headset feedback)
+
+# Beam chord: commented here; the launcher's staging enables it with the hand on the cannon as the modifier.
+# [chords.beam]                       # hold the left grip (middle finger): a left-stick flick picks the beam
+# modifier          = "left_grip"
+# modifier_mode     = "hold"
+# hold_also         = "x"             # Pro Controller X is held for as long as the grip is held: the game's swap-select
+#                                     # mode, so the D-pad picks beams instead of visors
+# left_stick_up     = "dpad_up"
+# left_stick_down   = "dpad_down"
+# left_stick_left   = "dpad_left"
+# left_stick_right  = "dpad_right"    # which direction is which beam: not yet confirmed in game
+
+[sticks]
+deadzone = 0.12

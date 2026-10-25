@@ -81,6 +81,9 @@ std::vector<u8> TryLoadFromDisk(const std::filesystem::path& path) {
 
 // TODO(crueter): Migrate to use Common::Net
 std::vector<u8> DownloadImage(const std::string& url_path, const std::filesystem::path& cache_path) {
+#ifdef VIZR_OFFLINE
+    return {}; // VIZR: no download
+#else
     LOG_DEBUG(Service_BCAT, "Downloading image: https://eden-emu.dev{}", url_path);
     try {
         httplib::Client cli("https://eden-emu.dev");
@@ -106,6 +109,7 @@ std::vector<u8> DownloadImage(const std::string& url_path, const std::filesystem
         LOG_WARNING(Service_BCAT, "Failed to download: {}", url_path);
     }
     return {};
+#endif
 }
 
 std::vector<u8> LoadDefaultLogo(bool large) {
@@ -423,7 +427,11 @@ std::vector<u8> BuildMsgpack(std::string_view title, std::string_view body,
     w.WriteString("");
 
     w.WriteKey("allow_domains");
+#ifdef VIZR_OFFLINE
+    w.WriteString(""); // VIZR: no link host
+#else
     w.WriteString("^https?://git.eden-emu.dev(/|$)");
+#endif
 
     // More link
     w.WriteKey("more");
@@ -457,6 +465,12 @@ std::vector<u8> BuildMsgpack(std::string_view title, std::string_view body,
 }
 
 void EnsureBuiltinNewsLoaded() {
+#ifdef VIZR_OFFLINE
+    // VIZR: no built-in news (the release list it shows was fetched from the network on its own thread).
+    static std::once_flag logged;
+    std::call_once(logged, [] { LOG_INFO(Service_BCAT, "news: built-in news is off in this build (no entries)"); });
+    return;
+#endif
     static std::once_flag once;
     std::call_once(once, [] {
         LoadDefaultLogos();

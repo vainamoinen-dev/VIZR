@@ -8,6 +8,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/string_util.h"
+#include "common/vizr.h"
 #include "common/scm_rev.h"
 #include "core/core.h"
 #include "core/hle/service/acc/profile_manager.h"
@@ -38,6 +39,8 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
         {"input-profile", no_argument, 0, 'i'},
         {"null-render", no_argument, 0, 'n'},
         {"singlecore", no_argument, 0, 's'},
+        {"no-vr", no_argument, 0, 'V'}, // VIZR: long option only
+        {"vr-test-roll", no_argument, 0, 'R'}, // VIZR: long option only
         {"filter", no_argument, 0, 'x'},
         {0, 0, 0, 0},
         // clang-format on
@@ -94,7 +97,7 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
                 break;
             case 'u': {
                 // Launch game with a specific user
-                bool argument_ok = isdigit(optarg[0]);
+                bool argument_ok = isdigit(optarg[0]) != 0;
                 p.selected_user = atoi(optarg);
                 if (!argument_ok) {
                     // try to look it up by username, only finds the first username that matches.
@@ -121,6 +124,12 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
                 break;
             case 's':
                 p.force_single_core = true;
+                break;
+            case 'V':
+                p.no_vr = true;
+                break;
+            case 'R':
+                p.vr_test_roll = true;
                 break;
             case 'x':
                 p.log_filter = argv[optind];
@@ -179,6 +188,12 @@ void ApplyLaunchParams(LaunchParams const& lp) noexcept {
     if (lp.force_null_render) {
         Settings::values.renderer_backend = Settings::RendererBackend::Null;
     }
+    if (lp.no_vr) {
+        VIZR::g_no_vr_flag = true;
+    }
+    if (lp.vr_test_roll) {
+        VIZR::g_test_roll_flag = true;
+    }
 
     if (lp.print_version) {
         LOG_INFO(Frontend, "Eden {} {}", Common::g_scm_branch, Common::g_scm_desc);
@@ -196,7 +211,9 @@ void ApplyLaunchParams(LaunchParams const& lp) noexcept {
             "-p, --program         Pass following string as arguments to executable\n"
             "-u, --user            Select a specific user profile from 0 to 7\n"
             "-d, --debug           Run the GDB stub on a port from 1 to 65535\n"
-            "-v, --version         Output version information and exit\n",
+            "-v, --version         Output version information and exit\n"
+            "    --no-vr           Turn VR headset output off for this run (VIZR)\n"
+            "    --vr-test-roll    Roll the hooked game camera 30 degrees (VIZR hook test)\n",
             lp.argv0
         );
     }

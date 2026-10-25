@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <bit>
@@ -15,6 +16,7 @@
 #include "common/alignment.h"
 #include "common/settings.h"
 #include "common/slot_vector.h"
+#include "common/vizr.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/engines/kepler_compute.h"
@@ -521,8 +523,147 @@ void TextureCache<P>::UpdateRenderTargets(bool is_clear) {
     if (render_targets != previous_render_targets) {
         ++render_targets_serial;
     }
+    // VIZR mode C: the last render target at a presented address. C1b/C1c kept
+    // the 8 newest targets, but eye R draws more than 8 before its marker clear, so main fell out.
+    if (VIZR::g_stereo_mode.load(std::memory_order_relaxed) == VIZR::StereoMode::ModeC && rt_image_id[0] &&
+        std::ranges::find(modec_presented_addrs, slot_images[rt_image_id[0]].cpu_addr) != modec_presented_addrs.end()) {
+        modec_presented_target = rt_image_id[0];
+    }
 
     flags[Dirty::DepthBiasGlobal] = true;
+}
+
+template <class P>
+void TextureCache<P>::RetireEyeHeld(u32 image_index) {
+    if (modec_presented_target && modec_presented_target.index == image_index) {
+        modec_presented_target = ImageId{};
+    }
+    const auto it = eye_held.find(image_index);
+    if (it == eye_held.end()) {
+        return;
+    }
+    for (auto& [key, view] : it->second.views) {
+        sentenced_image_view.Push(std::move(*view));
+    }
+    if (it->second.image) {
+        sentenced_images.Push(std::move(*it->second.image));
+    }
+    eye_held.erase(it);
+}
+
+template <class P>
+bool TextureCache<P>::ModeCHoldLeft(u64 frame) {
+    // The image eye L's content-to-main copy wrote this frame (the copy ends each eye's chain).
+    // C1b held a same-size character model target: only a presented address counts. None this
+    // frame (no copy since marker L) = no hold, never last frame's right eye.
+    const ImageId source = modec_presented_target;
+    // With look_at_copy the clear target is the presented frame buffer holding eye L (see vizr.h).
+    if (!source || (source == rt_image_id[0] &&
+                    !VIZR::g_modec_hold_clear_target.load(std::memory_order_relaxed))) {
+        return false;
+    }
+    Image& image = slot_images[source];
+    const bool rescaled = True(image.flags & ImageFlagBits::Rescaled);
+    auto found = eye_held.find(source.index);
+    if (found != eye_held.end() && found->second.rescaled != rescaled) {
+        RetireEyeHeld(source.index);
+        modec_presented_target = source; // RetireEyeHeld cleared it
+        found = eye_held.end();
+    }
+    if (found == eye_held.end()) {
+        EyeHeld held;
+        held.image = std::make_unique<Image>(runtime, image.info, image.gpu_addr, image.cpu_addr);
+        if (rescaled) {
+            held.image->ScaleUp();
+        }
+        held.rescaled = rescaled;
+        found = eye_held.emplace(source.index, std::move(held)).first;
+        // The clear target is the content target: equal sizes = DRS pinned.
+        const auto& content = slot_images[rt_image_id[0]].info.size;
+        LOG_INFO(HW_GPU,
+                 "VIZR mode C: holding the left eye of image {} ({}x{}, format {}, gpu {:#x}{}); content target {}x{}",
+                 source.index, image.info.size.width, image.info.size.height, static_cast<int>(image.info.format),
+                 image.gpu_addr, rescaled ? ", rescaled" : "", content.width, content.height);
+    }
+    const auto& resolution = Settings::values.resolution_info;
+    boost::container::small_vector<ImageCopy, 16> copies;
+    for (s32 level = 0; level < image.info.resources.levels; ++level) {
+        Extent3D size = MipSize(image.info.size, static_cast<u32>(level));
+        if (rescaled) {
+            size.width = resolution.ScaleUp(size.width);
+            size.height = resolution.ScaleUp(size.height);
+        }
+        const SubresourceLayers layers{
+            .base_level = level,
+            .base_layer = 0,
+            .num_layers = image.info.resources.layers,
+        };
+        copies.push_back(ImageCopy{
+            .src_subresource = layers,
+            .dst_subresource = layers,
+            .src_offset = {},
+            .dst_offset = {},
+            .extent = size,
+        });
+    }
+    runtime.CopyImage(*found->second.image, image, std::span<const ImageCopy>(copies.data(), copies.size()));
+    found->second.frame = frame;
+    return true;
+}
+
+template <class P>
+bool TextureCache<P>::ModeCHeldCurrent(DAddr cpu_addr, u64 frame) {
+    for (const auto& [index, held] : eye_held) {
+        if (held.image && held.frame == frame && slot_images[ImageId{index}].cpu_addr == cpu_addr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+template <class P>
+void TextureCache<P>::MarkFlatTarget() {
+    if (rt_image_id[0]) {
+        slot_images[rt_image_id[0]].vizr_flat_target = true;
+    }
+}
+
+template <class P>
+bool TextureCache<P>::IsFlatTarget() {
+    return rt_image_id[0] && slot_images[rt_image_id[0]].vizr_flat_target;
+}
+
+template <class P>
+void TextureCache<P>::ModeCMarkerLeft() {
+    modec_presented_target = ImageId{};
+}
+
+template <class P>
+std::pair<typename P::ImageView*, bool> TextureCache<P>::TryFindFramebufferHeldView(
+    const Tegra::FramebufferConfig& config, DAddr cpu_addr) {
+    const auto [view, scaled] = TryFindFramebufferImageView(config, cpu_addr);
+    if (!view) {
+        return {};
+    }
+    const auto it = eye_held.find(view->image_id.index);
+    if (it == eye_held.end() || !it->second.image ||
+        it->second.frame != VIZR::g_modec_frame.load(std::memory_order_relaxed)) {
+        return {}; // never a left eye of another frame
+    }
+    ImageViewInfo info{ImageViewType::e2D, view->format};
+    const bool opaque = config.blending == Tegra::BlendMode::Opaque;
+    if (opaque) {
+        info.x_source = static_cast<u8>(SwizzleSource::R);
+        info.y_source = static_cast<u8>(SwizzleSource::G);
+        info.z_source = static_cast<u8>(SwizzleSource::B);
+        info.w_source = static_cast<u8>(SwizzleSource::OneFloat);
+    }
+    const u32 key = (opaque ? 0x40000000u : 0u) | static_cast<u32>(view->format);
+    auto& held_view = it->second.views[key];
+    if (!held_view) {
+        held_view = std::make_unique<ImageView>(runtime, info, view->image_id, *it->second.image, slot_images);
+    }
+    return {held_view.get(), scaled};
 }
 
 template <class P>
@@ -798,6 +939,12 @@ bool TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
 template <class P>
 std::pair<typename P::ImageView*, bool> TextureCache<P>::TryFindFramebufferImageView(
     const Tegra::FramebufferConfig& config, DAddr cpu_addr) {
+    // VIZR mode C: the presented buffers are the only images the left eye may be held from.
+    if (VIZR::g_stereo_mode.load(std::memory_order_relaxed) == VIZR::StereoMode::ModeC && cpu_addr != 0 &&
+        std::ranges::find(modec_presented_addrs, cpu_addr) == modec_presented_addrs.end()) {
+        std::shift_left(modec_presented_addrs.begin(), modec_presented_addrs.end(), 1);
+        modec_presented_addrs.back() = cpu_addr;
+    }
     // TODO: Properly implement this
     const auto it = page_table.find(cpu_addr >> YUZU_PAGEBITS);
     if (it == page_table.end()) {
@@ -2315,6 +2462,7 @@ void TextureCache<P>::UntrackImage(ImageBase& image, ImageId image_id) {
 
 template <class P>
 void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
+    RetireEyeHeld(image_id.index); // VIZR mode C
     ImageBase& image = slot_images[image_id];
     if (image.HasScaled()) {
         total_used_memory -= GetScaledImageSizeBytes(image);

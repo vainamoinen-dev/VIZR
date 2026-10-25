@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <mutex>
 #include <utility>
 #include <type_traits>
@@ -135,7 +136,15 @@ private:
     void InitializeServer(u16 port) {
         using boost::asio::ip::tcp;
 
-        LOG_INFO(Debug_GDBStub, "Starting server on port {}...", port);
+        // Upstream binds on all interfaces (remote debugging). VIZR_GDB_LOOPBACK=1 binds to 127.0.0.1 only: a
+        // local debugger then raises no Windows Firewall prompt, which would come once per eden.exe path.
+#ifdef VIZR_OFFLINE
+        const bool loopback = true; // VIZR: this build listens on this PC only
+#else
+        const char* loopback_env = std::getenv("VIZR_GDB_LOOPBACK");
+        const bool loopback = loopback_env != nullptr && loopback_env[0] == '1';
+#endif
+        LOG_INFO(Debug_GDBStub, "Starting server on {} port {}...", loopback ? "127.0.0.1" : "all interfaces", port);
 
         // Run the connection thread.
         connection_thread = std::jthread([&, port](std::stop_token stop_token) {
@@ -143,7 +152,9 @@ private:
 
             try {
                 // Initialize the listening socket and accept a new client.
-                tcp::endpoint endpoint{boost::asio::ip::address_v4::any(), port};
+                tcp::endpoint endpoint{loopback ? boost::asio::ip::address_v4::loopback()
+                                                : boost::asio::ip::address_v4::any(),
+                                       port};
                 tcp::acceptor acceptor{io_context, endpoint};
 
                 AsyncAccept(acceptor, [&](auto&& peer) { AcceptConnection(std::move(peer)); });

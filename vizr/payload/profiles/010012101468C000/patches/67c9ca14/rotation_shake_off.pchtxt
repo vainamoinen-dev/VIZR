@@ -1,0 +1,15 @@
+@nsobid-67c9ca1428222752f951021464a7b3597eb98fec
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Camera-shake rotation off. Status: used in every headset session since build 33 (session logs). Metroid Prime Remastered v1.0.0 main.
+# CCameraShakerManager::GetCurrentAccumulatorRotation() const  (_ZNK20CCameraShakerManager29GetCurrentAccumulatorRotationEv) main+0x4da34c
+# Original returns the clamped (+/-5 deg) yaw (s0) and pitch (s1) of the engine camera shake; its only caller is
+# CCameraManager::GetShakeCurrentAccumulatorRotation, used by CDisplayManager::CreateCameraShakeLocalTransform, which
+# UpdateCameraNodes multiplies onto the render camera AFTER our hook. Translation shake is untouched.
+# Original bytes: 08 70 a4 b9 09 46 82 52 08 01 09 9b   (ldrsw x8,[x0,#0x2470]; mov w9,#0x1230; madd x8,x8,x9,x0)
+# New: fmov s0,wzr ; fmov s1,wzr ; ret
+# Hex below is in file byte order (Eden v0.2.1 and master both copy pchtxt hex in file order).
+@flag offset_shift 0x100
+@enabled
+004DA34C E003271EE103271EC0035FD6
+@stop

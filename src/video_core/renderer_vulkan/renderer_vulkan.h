@@ -13,6 +13,8 @@
 #include "common/dynamic_library.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/renderer_base.h"
+#include "video_core/renderer_vulkan/openxr/xr_presenter.h"
+#include "video_core/renderer_vulkan/openxr/xr_runtime.h"
 #ifdef HAS_LSFG
 #include "video_core/renderer_vulkan/present/frame_gen.h"
 #endif
@@ -84,6 +86,9 @@ private:
     std::shared_ptr<Common::DynamicLibrary> library;
     vk::InstanceDispatch dld;
 
+    // VIZR: asks the OpenXR runtime for its Vulkan extensions before the instance exists.
+    OpenXr::Runtime xr_runtime;
+
     // Keep original handles for compatibility with existing code
     vk::Instance instance;
 
@@ -107,6 +112,9 @@ private:
     std::optional<TurboMode> turbo_mode;
 
     Frame applet_frame;
+
+    // VIZR: last member, so it is destroyed first (before the device it uses).
+    OpenXr::Presenter xr_presenter;
 };
 
 } // namespace Vulkan

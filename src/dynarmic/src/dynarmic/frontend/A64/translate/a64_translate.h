@@ -38,6 +38,10 @@ struct TranslationOptions {
     /// If this is false, we treat the instruction as a NOP.
     /// If this is true, we emit an ExceptionRaised instruction.
     bool hook_hint_instructions = true;
+
+    /// VIZR: see A64::UserConfig::is_hook_pc.
+    bool (*is_hook_pc)(void* ctx, u64 pc) = nullptr;
+    void* hook_ctx = nullptr;
 };
 
 /**

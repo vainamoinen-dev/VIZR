@@ -66,3 +66,12 @@ vulkansdk*.exe
 
 # Build-time generated external sources
 externals/generated
+
+# VIZR: never commit console keys or game files
+*.keys
+*.nsp
+*.xci
+*.nca
+*.tik
+# VIZR: the release build places eden.exe here
+vizr/payload/build/

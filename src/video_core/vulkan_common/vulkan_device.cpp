@@ -30,6 +30,7 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
+#include "video_core/renderer_vulkan/openxr/xr_runtime.h"
 
 #if defined(__ANDROID__) && defined(ARCHITECTURE_arm64)
 #include <adrenotools/bcenabler.h>
@@ -732,10 +733,28 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
                                VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
     }
 
-    logical = vk::Device::Create(physical, queue_cis, ExtensionListForVulkan(loaded_extensions), first_next, dld);
+    auto device_extensions = ExtensionListForVulkan(loaded_extensions);
+    // VIZR: extensions the OpenXR runtime asked for (empty when XR is off)
+    OpenXr::AppendUnique(device_extensions, OpenXr::RequiredDeviceExtensions());
+    logical = vk::Device::Create(physical, queue_cis, device_extensions, first_next, dld);
 
     graphics_queue = logical.GetQueue(graphics_family);
     present_queue = logical.GetQueue(present_family);
+    // VIZR: queue 1 of the graphics family for the XR thread, if it was created.
+    xr_queue = graphics_queue;
+    xr_queue_index = 0;
+    for (const auto& ci : queue_cis) {
+        if (ci.queueFamilyIndex == graphics_family && ci.queueCount >= 2) {
+            xr_queue = logical.GetQueue(graphics_family, 1);
+            xr_queue_index = 1;
+        }
+    }
+    if (OpenXr::WantsOwnQueue()) {
+        LOG_INFO(Render_Vulkan, "VIZR OpenXR: {}",
+                 xr_queue_index != 0
+                     ? fmt::format("own queue (graphics family {} index 1)", graphics_family)
+                     : std::string{"one graphics queue, sharing Eden's queue (headset frames may drop when the game hitches)"});
+    }
 
     VmaVulkanFunctions functions{};
     functions.vkGetInstanceProcAddr = dld.vkGetInstanceProcAddr;
@@ -1677,11 +1696,20 @@ void Device::CollectToolingInfo() {
 }
 
 std::vector<VkDeviceQueueCreateInfo> Device::GetDeviceQueueCreateInfos() const {
-    static constexpr float QUEUE_PRIORITY = 1.0f;
+    static constexpr std::array<float, 2> QUEUE_PRIORITIES{1.0f, 1.0f};
 
     ::Common::unordered_set<u32> unique_queue_families{graphics_family, present_family};
     std::vector<VkDeviceQueueCreateInfo> queue_cis;
     queue_cis.reserve(unique_queue_families.size());
+
+    // VIZR: a second graphics queue for the XR thread, clamped to the family size.
+    u32 graphics_count = 1;
+    if (OpenXr::WantsOwnQueue()) {
+        const auto families = physical.GetQueueFamilyProperties();
+        if (graphics_family < families.size() && families[graphics_family].queueCount >= 2) {
+            graphics_count = 2;
+        }
+    }
 
     for (const u32 queue_family : unique_queue_families) {
         auto& ci = queue_cis.emplace_back(VkDeviceQueueCreateInfo{
@@ -1689,10 +1717,10 @@ std::vector<VkDeviceQueueCreateInfo> Device::GetDeviceQueueCreateInfos() const {
             .pNext = nullptr,
             .flags = 0,
             .queueFamilyIndex = queue_family,
-            .queueCount = 1,
+            .queueCount = queue_family == graphics_family ? graphics_count : 1,
             .pQueuePriorities = nullptr,
         });
-        ci.pQueuePriorities = &QUEUE_PRIORITY;
+        ci.pQueuePriorities = QUEUE_PRIORITIES.data();
     }
 
     return queue_cis;

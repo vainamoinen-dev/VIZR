@@ -10,6 +10,7 @@
 #include "core/arm/dynarmic/dynarmic_exclusive_monitor.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/k_process.h"
+#include "core/vizr/hook_runtime.h"
 #include "dynarmic/interface/A64/config.h"
 
 namespace Core {
@@ -120,6 +121,28 @@ void DynarmicCallbacks64::ExceptionRaised(u64 pc, Dynarmic::A64::Exception excep
         LOG_CRITICAL(Core_ARM, "Cannot execute instruction at unmapped address {:#016x}", pc);
         ReturnException(pc, PrefetchAbort);
         return;
+    case Dynarmic::A64::Exception::UserHook: {
+        // VIZR: block start, so the JIT state holds every guest register. Use `pc`, not
+        // GetPC(): jit_state.pc is stale inside a block.
+        const VIZR::Hooks::RegReader regs{
+            .ctx = &*m_parent.m_jit,
+            .x = [](const void* jit, u32 index) {
+                return static_cast<const Dynarmic::A64::Jit*>(jit)->GetRegister(index);
+            },
+            .sp = [](const void* jit) { return static_cast<const Dynarmic::A64::Jit*>(jit)->GetSP(); },
+            .set_x = [](const void* jit, u32 index, u64 value) {
+                const_cast<Dynarmic::A64::Jit*>(static_cast<const Dynarmic::A64::Jit*>(jit))->SetRegister(index, value);
+            },
+            .set_s = [](const void* jit, u32 index, u32 bits) {
+                auto* j = const_cast<Dynarmic::A64::Jit*>(static_cast<const Dynarmic::A64::Jit*>(jit));
+                auto v = j->GetVector(index);
+                v[0] = (v[0] & ~u64{0xffffffff}) | bits;
+                j->SetVector(index, v);
+            },
+        };
+        VIZR::Hooks::OnHook(m_process, pc, regs, m_memory);
+        return;
+    }
     default:
         if (m_debugger_enabled) {
             ReturnException(pc, InstructionBreakpoint);
@@ -194,6 +217,10 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
 
     // Callbacks
     config.callbacks = std::addressof(*m_cb);
+
+    // VIZR: hook PCs from the game profile; none = identical code.
+    config.is_hook_pc = &VIZR::Hooks::IsHookPc;
+    config.hook_ctx = m_cb->m_process; // hooks match the application process only
 
     // Memory
     if (page_table) {

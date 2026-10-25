@@ -87,6 +87,9 @@ cmake_dependent_option(ENABLE_LSFG "Enable Lossless Scaling frame generation" ON
 
 option(ENABLE_RESHADE "Enable ReShade FX post-processing effects" ON)
 
+# VIZR: OpenXR headset output (Vulkan renderer)
+cmake_dependent_option(VIZR_OPENXR "VIZR: OpenXR headset output" ON "WIN32" OFF)
+
 # non-linux bundled qt are static
 if (YUZU_USE_BUNDLED_QT AND (APPLE OR NOT UNIX))
     set(YUZU_STATIC_BUILD ON)
@@ -192,6 +195,15 @@ if (MSVC AND NOT CXX_CLANG)
     set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} /W3 /WX-")
 endif()
 
+# VIZR (release personal-data sweep): no build-machine paths in the binary. __FILE__ (asserts,
+# log lines; ours, dynarmic and the CPM deps under .cache/cpm, all added below this line) starts at the source root,
+# and the PDB reference holds the file name only. The PDB itself is still written (crash stacks).
+if (MSVC AND NOT CXX_CLANG)
+    file(TO_NATIVE_PATH "${CMAKE_SOURCE_DIR}/" VIZR_TRIM_ROOT)
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/d1trimfile:${VIZR_TRIM_ROOT}>")
+    add_link_options("/PDBALTPATH:%_PDB%")
+endif()
+
 # Set runtime library to MD/MDd for all configurations
 if(MSVC)
     if (YUZU_USE_BUNDLED_QT AND ARCHITECTURE_arm64)
@@ -261,6 +273,10 @@ option(YUZU_LEGACY "Apply patches that improve compatibility with older GPUs (e.
 
 option(NIGHTLY_BUILD "Use Nightly qualifiers in the update checker and build metadata" OFF)
 
+# VIZR: no network use of Eden's own (the built-in news fetch, the release and update requests, the multiplayer UI);
+# configure-eden-release.ps1 also turns the room server off. OFF only for the network gate's control build.
+option(VIZR_OFFLINE "VIZR: build without Eden's own network requests and multiplayer UI" ON)
+
 cmake_dependent_option(YUZU_ROOM "Enable dedicated room functionality" ON "NOT ANDROID" OFF)
 cmake_dependent_option(YUZU_ROOM_STANDALONE "Enable standalone room executable" ON "YUZU_ROOM" OFF)
 
@@ -306,6 +322,10 @@ endif()
 
 if (YUZU_ROOM)
     add_compile_definitions(YUZU_ROOM)
+endif()
+
+if (VIZR_OFFLINE)
+    add_compile_definitions(VIZR_OFFLINE)
 endif()
 
 if (UNIX AND NOT (LINUX OR WIN32))

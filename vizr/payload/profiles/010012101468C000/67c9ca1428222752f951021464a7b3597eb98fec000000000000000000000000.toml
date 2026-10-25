@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Metroid Prime Remastered — address file for main NSO build 67c9ca1428222752f951021464a7b3597eb98fec (v1.0.0, base game, no update).
+# File name = build ID padded with zeros to 32 bytes (64 hex chars), same padding Eden uses for exefs patch names.
+# Status: used in every headset session since build 13 (session logs). Offsets are module-relative to main's load base. Bytes are in file order.
+format_version = 1
+build_id = "67c9ca1428222752f951021464a7b3597eb98fec"
+
+[modules]
+main = { build_id = "67c9ca1428222752f951021464a7b3597eb98fec", base = "nso_load_base" }
+
+[hooks]
+# Primary write point (hook A). Inside CMP1CameraBehavior::Update(CStateManager&, float, CGameCamera const&, SCameraState&),
+# after it copied the current MP1 camera (transform x shake, FOV) into SCameraState and before the epilogue.
+# Registers at this PC: x19 = SCameraState*, x20 = CStateManager*, x21 = CCameraManagerMP1*, x22 = current CGameCameraMP1*.
+# Instruction at PC: ldp x20,x19,[sp,#0x50]. expect_from = -8 also covers the two stores before it.
+# Behaviors that run AFTER this one in CGameCamera's list could still change the state (the list is data-driven);
+# hook B below is the fallback for that case (off).
+camera_write = { module = "main", sym = "_ZN18CMP1CameraBehavior6UpdateER13CStateManagerfRK11CGameCameraR12SCameraState", sym_off = 0xc0, offset = 0xd6fd74, expect_from = -8, expect = "C8 66 42 B9 68 72 00 B9 F4 4F 45 A9 F6 57 44 A9", order = "read_then_write" }
+
+# Fallback write point (hook B, off): entry of CGameCamera::UpdateCameraState(SCameraState const&). x0 = CGameCamera*, x1 = finished SCameraState*
+# (after ALL behaviors). Fires for every engine camera, so it needs a `when` on x0 == the game camera.
+camera_write_b = { module = "main", sym = "_ZN11CGameCamera17UpdateCameraStateERK12SCameraState", sym_off = 0x0, offset = 0x4c1d58, expect = "FF 43 01 D1 FD 7B 03 A9 FD C3 00 91 F4 4F 04 A9", order = "read_then_write", enabled = false }
+
+[patches]
+rotation_shake_off = "patches/67c9ca14/rotation_shake_off.pchtxt"   # camera-shake rotation off; used in every headset session since build 33 (session logs)
+
+[fields]
+# --- written at hook A ---
+cam_xform   = { hook = "camera_write", base = "reg:x19", off = 0x38, type = "mat3x4" }  # SCameraState transform, camera-to-world
+cam_fov_rad = { hook = "camera_write", base = "reg:x19", off = 0x68, type = "f32" }     # vertical FOV, radians (engine field; NOT MP1 degrees at cam+0x25c)
+# --- read at hook A for `when` ---
+mp1_cur_cam_vptr    = { hook = "camera_write", base = "reg:x22", off = 0x0,  type = "ptr" }  # vtable of the current MP1 camera
+mp1_cine_count_a    = { hook = "camera_write", base = "reg:x21", off = 0x08, type = "u32" }  # CCameraManagerMP1 cinematic list A (vector count)
+mp1_cine_count_b    = { hook = "camera_write", base = "reg:x21", off = 0x18, type = "u32" }  # cinematic list B (wins over A); IsInCinematicCamera = A!=0 || B!=0
+mp1_cur_cam_id      = { hook = "camera_write", base = "reg:x21", off = 0x00, type = "u32" }  # normal current camera id (used when both lists are empty)
+mp1_fp_cam_ptr      = { hook = "camera_write", base = "reg:x21", off = 0x80, type = "ptr" }  # CFirstPersonCameraMP1* (always exists)
+mp1_ball_cam_ptr    = { hook = "camera_write", base = "reg:x21", off = 0x88, type = "ptr" }  # CBallCameraMP1*
+# Engine-layer cameras that win over the game camera: CStateManager+0x4e0168 -> CDisplayManager, +0x08 -> CCameraManager,
+# then +0xe0 interpolation camera, +0xe8 override camera. Both must be null for head tracking.
+# Register-rooted chain: start = x20, add 0x4e0168, deref, add 0x8, deref, then add `off`.
+engine_interp_cam   = { hook = "camera_write", base = "reg:x20 -> +0x4e0168 -> +0x8", off = 0xe0, type = "ptr" }
+engine_override_cam = { hook = "camera_write", base = "reg:x20 -> +0x4e0168 -> +0x8", off = 0xe8, type = "ptr" }
+# --- game state, all reachable at hook A. Hook A does NOT fire while the game is paused (map/inventory/logbook/options),
+# on a loading screen, or during a world transition, because CStateManager is not ticked then. The core's "hook stopped
+# firing" rule is the real detector for those.
+player_morph_state  = { hook = "camera_write", base = "reg:x20 -> +0x4e0150 -> +0x18", off = 0x4d4, type = "u32" }  # CPlayerMP1: 0 unmorphed, 1 morphed, 2 morphing, 3 unmorphing
+player_camera_state = { hook = "camera_write", base = "reg:x20 -> +0x4e0150 -> +0x18", off = 0x4d0, type = "u32" }  # 0 first person, 1 ball, 3 transitioning, 4 spawned/cinematic [GC EPlayerCameraState]
+player_frozen_time  = { hook = "camera_write", base = "reg:x20 -> +0x4e0150 -> +0x18", off = 0x9b4, type = "f32" }  # >0 = frozen (GetFrozenState)
+player_scan_state   = { hook = "camera_write", base = "reg:x20 -> +0x4e0150 -> +0x18", off = 0x584, type = "u32" }  # 0 none, 1 scanning, 2 scan complete
+player_freelook_pitch = { hook = "camera_write", base = "reg:x20 -> +0x4e0150 -> +0x18", off = 0x5cc, type = "f32" } # current look pitch (rad); target at +0x5d0
+player_yaw          = { hook = "camera_write", base = "reg:x20 -> +0x4e0150 -> +0x18 -> +0x8 -> +0x20 -> +0x40", off = 0x0, type = "mat3x4" }  # CPlayerMP1 body transform (engine actor xf block, live-read 2026-10-15: pure yaw about Y, origin at the feet). Body forward = +col2 (same direction as the camera +col2 at spawn); no bob/pitch in it.
+pause_screen        = { hook = "camera_write", base = "reg:x20 -> +0x4e0150", off = 0xc04, type = "u32" }  # desired pause screen, 0 = none (IsPaused)
+visor_current       = { base = "sym:gpGameState -> +0x0 -> +0x20", off = 0x18, type = "u32" }  # CPlayerStateMP1 visor 0 combat 1 xray 2 scan 3 thermal [GC]; +0x1c target, +0x20 transition timer (0.2 s)
+# (sym:gpGameState = main+0x459cc70, a .bss pointer to CGameStateMP1; usable outside the hook)
+mp1_fov_deg         = { hook = "camera_write", base = "reg:x22", off = 0x25c, type = "f32" }
+
+# Read-then-write note: source and target are the same memory. That is safe here: SCameraState is a
+# per-frame temporary on CGameCamera::Think's stack, seeded from the previous state, and CMP1CameraBehavior overwrites the
+# whole transform from the MP1 camera (recomputed from the player each frame) before our hook reads it. So the game never
+# reads our write back as input, unless a behavior that runs BEFORE CMP1 reads the previous transform.

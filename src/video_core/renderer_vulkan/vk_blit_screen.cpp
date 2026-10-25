@@ -35,6 +35,8 @@ BlitScreen::~BlitScreen() = default;
 void BlitScreen::WaitIdle(const Device& device) {
     present_manager.WaitPresent();
     scheduler.Finish();
+    // VIZR: vkDeviceWaitIdle needs every queue host-synchronised, including the XR queue.
+    std::scoped_lock xr_lock{device.XrQueueMutex()};
     device.GetLogical().WaitIdle();
 }
 

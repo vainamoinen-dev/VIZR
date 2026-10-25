@@ -1,0 +1,293 @@
+# SPDX-FileCopyrightText: Copyright 2026 VIZR contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# The release build on GitHub's own runner, from this repository alone: the emulator at the root, the launcher, the
+# profiles and the installer under vizr/. Job "build" (read only) checks that a tag is on main, builds eden.exe with no
+# dependency cache, runs the checks that need no game, keys or headset, builds the installer and the zip, writes
+# FORK-SOURCE.md (the commit every file is built from), and keeps the third-party sources fetched at configure time.
+# Job "release" attests every file and, for a pushed v* tag, opens a DRAFT release; nothing is published from here. A
+# manual run (workflow_dispatch) is a dry run: files and attestations named dry-run-<label>, the dependency cache
+# allowed, no release. Every action is pinned by its full commit SHA; event values reach scripts only through env.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      label:
+        description: 'Dry-run label (letters, digits, . _ -); files are named dry-run-<label>, no release is made'
+        required: true
+        default: 'test'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      label: ${{ steps.label.outputs.label }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Label
+        id: label
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_LABEL: ${{ inputs.label }}
+        run: |
+          $v = if ($env:EVENT -eq 'push') { $env:REF_NAME } else { "dry-run-$env:INPUT_LABEL" }
+          if ($v -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$') { throw "unsafe label: $v" }
+          "label=$v" >> $env:GITHUB_OUTPUT
+
+      - name: A tag must be on main
+        id: build
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if ($env:EVENT -eq 'push') {
+            git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+            if ($LASTEXITCODE -ne 0) { throw "the tag's commit $env:GITHUB_SHA is not on main" }
+          }
+          # The release number: the installer script's own (the export writes it).
+          $m = Select-String -Path vizr/installer/setup.iss -Pattern '^\s*#define Build "(\d+)"' | Select-Object -First 1
+          if (-not $m) { throw 'vizr/installer/setup.iss names no build number' }
+          "number=$($m.Matches[0].Groups[1].Value)" >> $env:GITHUB_OUTPUT
+
+      - name: Vulkan SDK 1.4.363.0 (glslangValidator, for the shaders)
+        env:
+          SDK_SHA256: 94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP 'vulkansdk.exe'
+          Invoke-WebRequest -Uri 'https://sdk.lunarg.com/sdk/download/1.4.363.0/windows/vulkansdk-windows-X64-1.4.363.0.exe' -OutFile $exe
+          $got = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($got -ne $env:SDK_SHA256) { throw "Vulkan SDK installer SHA-256 $got, expected $env:SDK_SHA256" }
+          $sdk = 'C:\VulkanSDK\1.4.363.0'
+          $p = Start-Process -FilePath $exe -Wait -PassThru -ArgumentList @('--root', $sdk, '--accept-licenses', '--default-answer', '--confirm-command', 'install')
+          if ($p.ExitCode -ne 0 -or -not (Test-Path "$sdk\Bin\glslangValidator.exe")) { throw "Vulkan SDK install failed ($($p.ExitCode))" }
+          "VULKAN_SDK=$sdk" >> $env:GITHUB_ENV
+          "$sdk\Bin" >> $env:GITHUB_PATH
+
+      - name: MSVC x64 environment (the image's newest Visual Studio)
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'no Visual Studio with the C++ x64 tools' }
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvarsall.bat`" x64 && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$' -and $Matches[1] -notmatch '^(GITHUB_|RUNNER_)') { "$($Matches[1])=$($Matches[2])" >> $env:GITHUB_ENV }
+          }
+
+      - name: Dependency cache restore (dry runs only; a tag builds cold)
+        id: cpm
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/cpm
+          key: cpm-${{ hashFiles('cpmfile.json', '**/cpmfile.json') }}
+
+      - name: Configure
+        run: |
+          # release-cmake-flags: the export guard checks this line against configure-eden-release.ps1 and BUILDING.md
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DYUZU_TESTS=OFF -DYUZU_CMD=OFF -DENABLE_WEB_SERVICE=OFF -DENABLE_UPDATE_CHECKER=OFF -DYUZU_ROOM=OFF -DYUZU_ROOM_STANDALONE=OFF -DVIZR_OFFLINE=ON
+          if ($LASTEXITCODE -ne 0) { throw 'configure failed' }
+
+      - name: Dependency cache save (dry runs only)
+        if: github.event_name == 'workflow_dispatch' && steps.cpm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/cpm
+          key: cpm-${{ hashFiles('cpmfile.json', '**/cpmfile.json') }}
+
+      - name: Keep the third-party sources fetched at configure time
+        env:
+          LABEL: ${{ steps.label.outputs.label }}
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          & "$env:SystemRoot\System32\tar.exe" -a -c -f "out/third-party-sources-$env:LABEL.zip" -C .cache cpm
+          if ($LASTEXITCODE -ne 0) { throw 'third-party sources zip failed' }
+
+      - name: Build
+        run: |
+          cmake --build build
+          if ($LASTEXITCODE -ne 0) { throw 'build failed' }
+
+      - name: Record the toolchain
+        env:
+          LABEL: ${{ steps.label.outputs.label }}
+        run: |
+          $cl = (cmd /c 'cl 2>&1' | Select-Object -First 1)
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $lines = @(
+            "label: $env:LABEL",
+            "commit: $env:GITHUB_SHA",
+            "runner image: $env:ImageOS $env:ImageVersion",
+            "compiler: $cl (VCToolsVersion $env:VCToolsVersion)",
+            "cmake: $((cmake --version | Select-Object -First 1))",
+            "ninja: $(ninja --version)",
+            "Vulkan SDK: $env:VULKAN_SDK",
+            "Inno Setup: $((Get-Item $iscc).VersionInfo.ProductVersion)"
+          )
+          $lines | Set-Content -Encoding utf8 out/BUILD-INFO.txt
+          $lines | ForEach-Object { "- $_" } >> $env:GITHUB_STEP_SUMMARY
+
+      - name: 'Check: no request hosts in eden.exe, no room server, the CMake options'
+        run: |
+          ./.github/scripts/net-static-check.ps1 -Bin build/bin
+          if ($LASTEXITCODE -ne 0) { throw 'network static check failed' }
+
+      - name: 'Check: line 1 names this commit'
+        run: |
+          ./.github/scripts/line1-check.ps1 -Bin build/bin -Expect $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'line 1 check failed' }
+
+      - name: Installer and zip
+        env:
+          BUILD: ${{ steps.build.outputs.number }}
+          LABEL: ${{ steps.label.outputs.label }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+        run: |
+          # FORK-SOURCE.md: the commit every file is built from (a tree cannot hold its own commit, so it is written here).
+          $fs = @(
+            '# VIZR source (GPL-3.0-or-later)',
+            '',
+            "Built from commit $env:GITHUB_SHA (build $env:BUILD, $env:LABEL) of $env:SERVER/$env:REPO, its full source.",
+            'Eden: https://git.eden-emu.dev/eden-emu/eden'
+          )
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path vizr) 'FORK-SOURCE.md'), (($fs -join "`r`n") + "`r`n"))
+          # The installer script reads the licences and the third-party note from vizr/, beside FORK-SOURCE.md.
+          Copy-Item LICENSE.txt vizr/
+          Copy-Item THIRD-PARTY-VIZR.md vizr/THIRD-PARTY.md
+          Copy-Item -Recurse LICENSES vizr/LICENSES
+          $bin = 'vizr/payload/build/eden/bin'
+          New-Item -ItemType Directory -Force "$bin/user/config" | Out-Null
+          Copy-Item build/bin/eden.exe "$bin/"
+          Copy-Item vizr/config/qt-config.ini "$bin/user/config/"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          # The finish page's Visual C++ runtime check needs the minor of the MSVC tools that built eden.exe (14.51 -> 51).
+          if ($env:VCToolsVersion -notmatch '^14\.(\d+)\.') { throw "VCToolsVersion '$env:VCToolsVersion' is not 14.x" }
+          $vcMinor = $Matches[1]
+          $p = @{ FilePath = $iscc; Wait = $true; PassThru = $true; NoNewWindow = $true
+                  ArgumentList = @("/DBuild=$env:BUILD", '/DBinDir=eden', "/DForkHash=$($env:GITHUB_SHA.Substring(0, 10))", "/DVcMinor=$vcMinor", 'vizr/installer/setup.iss') }
+          $r = Start-Process @p
+          if ($r.ExitCode -ne 0) { throw "ISCC failed ($($r.ExitCode))" }
+          Move-Item "vizr/VIZR-Setup-b$env:BUILD.exe" "out/VIZR-Setup-$env:LABEL.exe"
+          # The zip holds what the installer installs.
+          $z = Join-Path $env:RUNNER_TEMP "VIZR-$env:LABEL"
+          New-Item -ItemType Directory -Force $z | Out-Null
+          Copy-Item -Recurse vizr/payload/* $z
+          foreach ($f in 'LICENSE.txt', 'THIRD-PARTY.md', 'FORK-SOURCE.md') { Copy-Item "vizr/$f" $z }
+          Copy-Item -Recurse vizr/LICENSES $z
+          Compress-Archive -Path "$z/*" -DestinationPath "out/VIZR-$env:LABEL.zip"
+          Copy-Item build/bin/eden.exe out/eden.exe
+          # SHA256SUMS: the installer, the zip, eden.exe, the third-party sources, and every file inside the zip
+          # (as zip/<path>).
+          $sums = @()
+          foreach ($f in "VIZR-Setup-$env:LABEL.exe", "VIZR-$env:LABEL.zip", 'eden.exe', "third-party-sources-$env:LABEL.zip") {
+            $sums += "$((Get-FileHash "out/$f" -Algorithm SHA256).Hash.ToLowerInvariant())  $f"
+          }
+          $zroot = (Resolve-Path $z).Path
+          Get-ChildItem -Recurse -File $zroot | Sort-Object FullName | ForEach-Object {
+            $rel = $_.FullName.Substring($zroot.Length + 1).Replace('\', '/')
+            $sums += "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  zip/$rel"
+          }
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path out) 'SHA256SUMS.txt'), (($sums -join "`n") + "`n"))
+
+      - name: 'Check: install, uninstall, nothing left behind'
+        env:
+          LABEL: ${{ steps.label.outputs.label }}
+        run: |
+          ./.github/scripts/installer-selftest.ps1 -Setup "out/VIZR-Setup-$env:LABEL.exe" -Iss vizr/installer/setup.iss
+          if ($LASTEXITCODE -ne 0) { throw 'installer self-test failed' }
+
+      - name: Keep the files for the release job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Fetch the files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: out
+
+      # GitHub stores attestations for public repositories only (private ones need Enterprise Cloud): a dispatch dry run
+      # on a private repository skips them (its files are checked locally without, verify-release.ps1 -NoAttestation).
+      # A v* tag always attests or fails: on a private repository the step below refuses it first, so no draft is ever
+      # made without them.
+      - name: A release tag needs a public repository (attestations)
+        if: github.event_name == 'push' && github.event.repository.private
+        run: |
+          echo 'release tags are built on the public repository only: attestations are not stored for a private one' >&2
+          exit 1
+
+      - name: Attest build provenance
+        if: ${{ github.event_name == 'push' || !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            out/VIZR-Setup-*.exe
+            out/VIZR-*.zip
+            out/eden.exe
+            out/third-party-sources-*.zip
+            out/SHA256SUMS.txt
+            out/BUILD-INFO.txt
+
+      - name: Draft release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.label }}
+        run: |
+          set -euo pipefail
+          {
+            echo "VIZR ${TAG}: Metroid Prime Remastered in VR."
+            echo
+            echo "Download VIZR-Setup-${TAG}.exe and run it. The README has the steps, the controls and the menu."
+            echo
+            echo '## Checking a download'
+            echo
+            echo 'SHA256SUMS.txt lists the SHA-256 of every file, and of every file inside the zip. Each file carries a build'
+            echo 'provenance attestation from this release:'
+            echo
+            echo "    gh attestation verify <file> --repo ${GITHUB_REPOSITORY} --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml --source-ref refs/tags/${TAG}"
+            echo
+            echo '## Source'
+            echo
+            echo "This repository at ${TAG} (${GITHUB_SHA}). third-party-sources-${TAG}.zip holds the third-party code the build"
+            echo 'fetched when it configured.'
+            echo
+            echo '```'
+            cat out/BUILD-INFO.txt
+            echo '```'
+          } > notes.md
+          gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft --verify-tag --title "VIZR ${TAG}" --notes-file notes.md \
+            "out/VIZR-Setup-${TAG}.exe" "out/VIZR-${TAG}.zip" out/eden.exe "out/third-party-sources-${TAG}.zip" out/SHA256SUMS.txt
